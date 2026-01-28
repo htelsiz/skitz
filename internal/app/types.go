@@ -1,9 +1,8 @@
-package main
+package app
 
 import (
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -20,44 +19,26 @@ type resource struct {
 	description string // First line of content
 	content     string
 	sections    []section
+	embedded    bool // true if loaded from embedded FS (not user dir)
 }
 
 // command represents a parsed command from markdown
-// Commands are annotated with ^run or ^run:varname tags
-// Example: `docker ps` list containers ^run
-// Example: `claude "{{prompt}}"` start with prompt ^run:prompt
 type command struct {
-	lineNum     int    // Original line number in content
-	raw         string // Raw command text (e.g., `claude "{{prompt}}"`)
-	cmd         string // Executable command template
-	runnable    bool   // Has ^run annotation
-	inputVar    string // Variable name from ^run:varname (empty if no input needed)
-	description string // Description text
-}
-
-type MCPServerStatus struct {
-	Name                   string
-	URL                    string
-	Connected              bool
-	Tools                  []string
-	Prompts                []string
-	Resources              []string
-	ResourceTemplates      []string
-	Error                  string
-	ToolsError             string
-	PromptsError           string
-	ResourcesError         string
-	ResourceTemplatesError string
-	LastUpdated            time.Time
+	lineNum     int
+	raw         string
+	cmd         string
+	runnable    bool
+	inputVar    string
+	description string
 }
 
 // toolMeta contains metadata for enhanced card rendering
 type toolMeta struct {
 	icon        string
-	asciiArt    string // Small ASCII art for card
+	asciiArt    string
 	color       lipgloss.Color
 	category    string
-	status      string // "active", "coming_soon", "new"
+	status      string
 	cmdCount    int
 	lastUsed    string
 	topCommands []string
@@ -70,7 +51,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │ ▲ │
 ╰───╯`,
-		color:       lipgloss.Color("39"),  // Blue
+		color:       lipgloss.Color("39"),
 		category:    "Cloud",
 		status:      "active",
 		cmdCount:    29,
@@ -82,7 +63,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │ ◐ │
 ╰───╯`,
-		color:       lipgloss.Color("99"),  // Purple
+		color:       lipgloss.Color("99"),
 		category:    "AI",
 		status:      "active",
 		cmdCount:    24,
@@ -94,7 +75,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │ ▶ │
 ╰───╯`,
-		color:       lipgloss.Color("51"),  // Cyan
+		color:       lipgloss.Color("51"),
 		category:    "AI Editor",
 		status:      "active",
 		cmdCount:    28,
@@ -106,7 +87,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │▣▣▣│
 ╰───╯`,
-		color:       lipgloss.Color("39"),  // Blue
+		color:       lipgloss.Color("39"),
 		category:    "Containers",
 		status:      "active",
 		cmdCount:    42,
@@ -118,7 +99,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │ ⎇ │
 ╰───╯`,
-		color:       lipgloss.Color("208"), // Orange
+		color:       lipgloss.Color("208"),
 		category:    "VCS",
 		status:      "active",
 		cmdCount:    38,
@@ -130,7 +111,7 @@ var toolMetadata = map[string]toolMeta{
 		asciiArt: `╭───╮
 │ ◈ │
 ╰───╯`,
-		color:       lipgloss.Color("114"), // Green
+		color:       lipgloss.Color("114"),
 		category:    "Protocol",
 		status:      "new",
 		cmdCount:    12,
@@ -140,14 +121,10 @@ var toolMetadata = map[string]toolMeta{
 }
 
 // parseCommands parses commands from markdown content looking for ^run annotations
-// Syntax:
-//   `command` description ^run           - executable command
-//   `command {{var}}` description ^run:var - command with input prompt
 func parseCommands(content string) []command {
 	var commands []command
 	lines := strings.Split(content, "\n")
 
-	// Match: `command` description ^run or ^run:varname
 	cmdRe := regexp.MustCompile("`" + `([^` + "`" + `]+)` + "`" + `\s*([^^]*)\s*\^run(?::(\w+))?`)
 
 	for i, line := range lines {
@@ -163,10 +140,8 @@ func parseCommands(content string) []command {
 			inputVar = matches[3]
 		}
 
-		// Build the executable command - replace {{var}} with placeholder
 		execCmd := rawCmd
 		if inputVar != "" {
-			// Replace {{varname}} with %s for later substitution
 			varPattern := regexp.MustCompile(`\{\{` + inputVar + `\}\}`)
 			execCmd = varPattern.ReplaceAllString(rawCmd, "{{INPUT}}")
 		}
@@ -186,14 +161,12 @@ func parseCommands(content string) []command {
 
 // highlightShellCommand applies syntax highlighting to shell commands
 func highlightShellCommand(cmd string) string {
-	// Define colors using lipgloss
-	commandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)   // green for main command
-	subcommandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))           // cyan for subcommands
-	flagColor := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))                // pink for flags
-	valueColor := lipgloss.NewStyle().Foreground(lipgloss.Color("228"))               // yellow for values
-	variableColor := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true) // bright pink for {{variables}}
+	commandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
+	subcommandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+	flagColor := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+	valueColor := lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	variableColor := lipgloss.NewStyle().Foreground(lipgloss.Color("213")).Bold(true)
 
-	// Split command into tokens
 	tokens := strings.Fields(cmd)
 	if len(tokens) == 0 {
 		return cmd
@@ -204,35 +177,30 @@ func highlightShellCommand(cmd string) string {
 	expectingValue := false
 
 	for _, token := range tokens {
-		// Check for {{variable}} patterns first
 		if strings.Contains(token, "{{") && strings.Contains(token, "}}") {
 			highlighted = append(highlighted, variableColor.Render(token))
 			expectingValue = false
 			continue
 		}
 
-		// First token is the main command (e.g., "az", "git", "docker")
 		if firstToken {
 			highlighted = append(highlighted, commandColor.Render(token))
 			firstToken = false
 			continue
 		}
 
-		// Flags (start with - or --)
 		if strings.HasPrefix(token, "--") || (strings.HasPrefix(token, "-") && len(token) > 1 && token != "-") {
 			highlighted = append(highlighted, flagColor.Render(token))
 			expectingValue = true
 			continue
 		}
 
-		// Values after flags
 		if expectingValue && !strings.HasPrefix(token, "-") {
 			highlighted = append(highlighted, valueColor.Render(token))
 			expectingValue = false
 			continue
 		}
 
-		// Subcommands (no prefix, not after a flag)
 		highlighted = append(highlighted, subcommandColor.Render(token))
 		expectingValue = false
 	}

@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -8,6 +8,20 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// Directories used by config and data persistence.
+var (
+	ConfigDir    string
+	DataDir      string
+	ResourcesDir string
+)
+
+func init() {
+	home, _ := os.UserHomeDir()
+	ConfigDir = filepath.Join(home, ".config", "skitz")
+	DataDir = filepath.Join(home, ".local", "share", "skitz")
+	ResourcesDir = filepath.Join(home, ".config", "skitz", "resources")
+}
 
 // Config types
 type Config struct {
@@ -51,7 +65,7 @@ type HistoryConfig struct {
 }
 
 type AIConfig struct {
-	OpenAIAPIKey string `yaml:"openai_api_key,omitempty"` // Optional, falls back to mods config if not set
+	OpenAIAPIKey string `yaml:"openai_api_key,omitempty"`
 }
 
 type MCPConfig struct {
@@ -75,52 +89,52 @@ type HistoryEntry struct {
 
 // AgentInteraction tracks interactions with AI agents
 type AgentInteraction struct {
-	Agent     string    `json:"agent"`      // e.g., "BIA Junior"
-	Action    string    `json:"action"`     // e.g., "Code Review"
-	Input     string    `json:"input"`      // Summary of input (truncated)
-	Output    string    `json:"output"`     // Summary of output (truncated)
+	Agent     string    `json:"agent"`
+	Action    string    `json:"action"`
+	Input     string    `json:"input"`
+	Output    string    `json:"output"`
 	Timestamp time.Time `json:"timestamp"`
 	Success   bool      `json:"success"`
 }
 
-// loadConfig loads the configuration from disk
-func loadConfig() Config {
-	configPath := filepath.Join(configDir, "config.yaml")
+// Load loads the configuration from disk. defaultMCPURL is used when
+// creating the default MCP server entry.
+func Load(defaultMCPURL string) Config {
+	configPath := filepath.Join(ConfigDir, "config.yaml")
 
-	// Check if config exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		cfg := createDefaultConfig()
-		saveConfig(cfg)
+		cfg := CreateDefault(defaultMCPURL)
+		Save(cfg)
 		return cfg
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return createDefaultConfig()
+		return CreateDefault(defaultMCPURL)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return createDefaultConfig()
+		return CreateDefault(defaultMCPURL)
 	}
 
 	if cfg.Version < 2 {
 		cfg.Version = 2
 		if len(cfg.MCP.Servers) == 0 {
-			cfg.MCP = defaultMCPConfig()
+			cfg.MCP = defaultMCPConfig(defaultMCPURL)
 		}
 	}
 
 	if cfg.MCP.Enabled && len(cfg.MCP.Servers) == 0 {
-		cfg.MCP.Servers = defaultMCPConfig().Servers
+		cfg.MCP.Servers = defaultMCPConfig(defaultMCPURL).Servers
 	}
 
 	return cfg
 }
 
-// saveConfig saves the configuration to disk
-func saveConfig(cfg Config) error {
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+// Save saves the configuration to disk.
+func Save(cfg Config) error {
+	if err := os.MkdirAll(ConfigDir, 0755); err != nil {
 		return err
 	}
 
@@ -129,11 +143,11 @@ func saveConfig(cfg Config) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(configDir, "config.yaml"), data, 0644)
+	return os.WriteFile(filepath.Join(ConfigDir, "config.yaml"), data, 0644)
 }
 
-// createDefaultConfig creates the default configuration
-func createDefaultConfig() Config {
+// CreateDefault creates the default configuration.
+func CreateDefault(defaultMCPURL string) Config {
 	return Config{
 		Version: 2,
 		QuickActions: QuickActionsConfig{
@@ -156,28 +170,28 @@ func createDefaultConfig() Config {
 		},
 		Favorites: []string{},
 		AI: AIConfig{
-			OpenAIAPIKey: "", // Optional: Set your OpenAI API key here, or leave empty to use mods config
+			OpenAIAPIKey: "",
 		},
-		MCP: defaultMCPConfig(),
+		MCP: defaultMCPConfig(defaultMCPURL),
 	}
 }
 
-func defaultMCPConfig() MCPConfig {
+func defaultMCPConfig(defaultMCPURL string) MCPConfig {
 	return MCPConfig{
 		Enabled:        true,
 		RefreshSeconds: 60,
 		Servers: []MCPServerConfig{
 			{
 				Name: "bldrspec-ai",
-				URL:  GetDefaultMCPServerURL(),
+				URL:  defaultMCPURL,
 			},
 		},
 	}
 }
 
-// loadHistory loads command history from disk
-func loadHistory() []HistoryEntry {
-	historyPath := filepath.Join(dataDir, "history.json")
+// LoadHistory loads command history from disk.
+func LoadHistory() []HistoryEntry {
+	historyPath := filepath.Join(DataDir, "history.json")
 
 	data, err := os.ReadFile(historyPath)
 	if err != nil {
@@ -192,9 +206,9 @@ func loadHistory() []HistoryEntry {
 	return history
 }
 
-// saveHistory saves command history to disk
-func saveHistory(history []HistoryEntry) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+// SaveHistory saves command history to disk.
+func SaveHistory(history []HistoryEntry) error {
+	if err := os.MkdirAll(DataDir, 0755); err != nil {
 		return err
 	}
 
@@ -203,15 +217,13 @@ func saveHistory(history []HistoryEntry) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dataDir, "history.json"), data, 0644)
+	return os.WriteFile(filepath.Join(DataDir, "history.json"), data, 0644)
 }
 
-// addToHistory adds an entry to history and maintains max size
-func addToHistory(history []HistoryEntry, entry HistoryEntry, maxItems int) []HistoryEntry {
-	// Prepend new entry
+// AddToHistory adds an entry to history and maintains max size.
+func AddToHistory(history []HistoryEntry, entry HistoryEntry, maxItems int) []HistoryEntry {
 	history = append([]HistoryEntry{entry}, history...)
 
-	// Trim to max
 	if len(history) > maxItems {
 		history = history[:maxItems]
 	}
@@ -219,9 +231,9 @@ func addToHistory(history []HistoryEntry, entry HistoryEntry, maxItems int) []Hi
 	return history
 }
 
-// loadAgentHistory loads agent interaction history from disk
-func loadAgentHistory() []AgentInteraction {
-	historyPath := filepath.Join(dataDir, "agent_history.json")
+// LoadAgentHistory loads agent interaction history from disk.
+func LoadAgentHistory() []AgentInteraction {
+	historyPath := filepath.Join(DataDir, "agent_history.json")
 
 	data, err := os.ReadFile(historyPath)
 	if err != nil {
@@ -236,9 +248,9 @@ func loadAgentHistory() []AgentInteraction {
 	return history
 }
 
-// saveAgentHistory saves agent interaction history to disk
-func saveAgentHistory(history []AgentInteraction) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+// SaveAgentHistory saves agent interaction history to disk.
+func SaveAgentHistory(history []AgentInteraction) error {
+	if err := os.MkdirAll(DataDir, 0755); err != nil {
 		return err
 	}
 
@@ -247,15 +259,13 @@ func saveAgentHistory(history []AgentInteraction) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dataDir, "agent_history.json"), data, 0644)
+	return os.WriteFile(filepath.Join(DataDir, "agent_history.json"), data, 0644)
 }
 
-// addAgentInteraction adds an interaction to history and maintains max size
-func addAgentInteraction(history []AgentInteraction, entry AgentInteraction, maxItems int) []AgentInteraction {
-	// Prepend new entry
+// AddAgentInteraction adds an interaction to history and maintains max size.
+func AddAgentInteraction(history []AgentInteraction, entry AgentInteraction, maxItems int) []AgentInteraction {
 	history = append([]AgentInteraction{entry}, history...)
 
-	// Trim to max
 	if len(history) > maxItems {
 		history = history[:maxItems]
 	}

@@ -18,7 +18,7 @@ A personal command reference TUI built with the [Charm](https://charm.sh) stack.
 ### Build & Install
 
 ```bash
-cd ~/dotfiles/cli/skitz
+cd ~/projects/skitz
 go build -o skitz
 ln -sf $(pwd)/skitz ~/.local/bin/skitz
 ```
@@ -121,7 +121,7 @@ Azure deployment wizard:
 
 ## Resource Files
 
-Resources live in `~/dotfiles/resources/`:
+Resources live in `~/.config/skitz/resources/`:
 
 ```
 resources/

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -27,20 +27,17 @@ type interactiveCmd struct {
 	needsInput bool
 	inputVar   string
 	tool       string
-	finalCmd   string // Populated after execution for history
+	finalCmd   string
 	success    bool
 }
 
 func (c *interactiveCmd) Run() error {
 	finalCmd := c.cmd
 
-	// Clear screen
 	fmt.Print("\033[H\033[2J")
 
-	// Store the final command for history
 	c.finalCmd = finalCmd
 
-	// Execute directly - input already handled by caller
 	cmd := newShellCommand(finalCmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -67,15 +64,14 @@ func (c interactiveCmd) SetStderr(w io.Writer) {}
 
 // isInteractiveCommand checks if a command needs full terminal control
 func isInteractiveCommand(cmd string) bool {
-	// Commands that need full TUI/interactive terminal
 	interactivePatterns := []string{
-		"claude",      // Claude Code CLI
-		"vim", "nvim", "vi", // Editors
-		"htop", "top", "btop", // System monitors
-		"less", "more", // Pagers
-		"ssh",         // Remote shells
-		"docker run",  // Interactive containers
-		"-it",         // Docker interactive flag
+		"claude",
+		"vim", "nvim", "vi",
+		"htop", "top", "btop",
+		"less", "more",
+		"ssh",
+		"docker run",
+		"-it",
 		"--interactive",
 	}
 
@@ -97,7 +93,7 @@ func (m *model) executeInteractive(cmd command, finalCmd string) tea.Cmd {
 
 	ic := &interactiveCmd{
 		cmd:        finalCmd,
-		needsInput: false, // Already handled above
+		needsInput: false,
 		inputVar:   "",
 		tool:       toolName,
 	}
@@ -130,7 +126,6 @@ type termStartMsg struct {
 
 // executeEmbedded runs a command in an embedded terminal pane
 func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
-	// Terminal pane dimensions
 	termW := m.width - 6
 	termH := 20
 	if termW < 40 {
@@ -141,12 +136,10 @@ func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		// Silence vterm debug logs temporarily, then restore
 		oldLogOutput := log.Writer()
 		log.SetOutput(io.Discard)
 		defer log.SetOutput(oldLogOutput)
 
-		// Create the command - use user's shell to inherit environment (Azure CLI auth, etc.)
 		c := newShellCommand(cmdStr)
 		c.Env = append(os.Environ(),
 			"TERM=xterm-256color",
@@ -154,7 +147,6 @@ func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
 			fmt.Sprintf("LINES=%d", termH),
 		)
 
-		// Start PTY
 		ptmx, err := pty.StartWithSize(c, &pty.Winsize{
 			Rows: uint16(termH),
 			Cols: uint16(termW),
@@ -163,7 +155,6 @@ func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
 			return termExitMsg{err: err}
 		}
 
-		// Create vterm
 		renderer := &termRenderer{}
 		vt := vterm.NewVTerm(renderer, func(x, y int) {})
 		vt.Reshape(0, 0, termW, termH)
@@ -177,4 +168,3 @@ func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
 		}
 	}
 }
-

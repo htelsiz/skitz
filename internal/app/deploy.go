@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -28,8 +28,8 @@ const (
 type DeployMethod string
 
 const (
-	DeployACI      DeployMethod = "aci"      // Azure Container Instances
-	DeployPipeline DeployMethod = "pipeline" // Azure Pipelines (inline script)
+	DeployACI      DeployMethod = "aci"
+	DeployPipeline DeployMethod = "pipeline"
 )
 
 // DeployConfig holds the configuration for agent deployment
@@ -39,12 +39,11 @@ type DeployConfig struct {
 	AgentName     string
 	ResourceGroup string
 	Location      string
-	Prompt        string // The task/prompt for the agent
-	// Azure AI Foundry settings
-	AIAccount    string // Azure AI account name
-	AIEndpoint   string // Azure AI endpoint URL
-	AIDeployment string // Model deployment name
-	AIModel      string // Model name (e.g., gpt-4, claude-3)
+	Prompt        string
+	AIAccount     string
+	AIEndpoint    string
+	AIDeployment  string
+	AIModel       string
 }
 
 // AzureAIAccount represents an Azure AI Services account
@@ -53,16 +52,16 @@ type AzureAIAccount struct {
 	ResourceGroup string
 	Location      string
 	Endpoint      string
-	Kind          string // OpenAI, CognitiveServices, etc.
+	Kind          string
 }
 
 // AzureAIDeployment represents a model deployment
 type AzureAIDeployment struct {
-	Name      string
-	Model     string
-	Version   string
-	SKU       string
-	Capacity  int
+	Name     string
+	Model    string
+	Version  string
+	SKU      string
+	Capacity int
 }
 
 // deployAgentCmd implements tea.ExecCommand for interactive deployment
@@ -73,19 +72,16 @@ type deployAgentCmd struct {
 func (c *deployAgentCmd) Run() error {
 	ctx := context.Background()
 
-	// Clear screen
 	fmt.Print("\033[H\033[2J")
 
 	tap.Intro("🚀 Deploy Agent")
 
-	// Check Azure CLI
 	if !checkAzureCLI() {
 		tap.Box("Azure CLI required. Install from:\nhttps://docs.microsoft.com/en-us/cli/azure/install-azure-cli", "Error", tap.BoxOptions{})
 		waitForEnter()
 		return nil
 	}
 
-	// Step 1: List Azure AI Foundry accounts
 	spinner := tap.NewSpinner(tap.SpinnerOptions{})
 	spinner.Start("Loading Azure AI accounts...")
 	accounts := getAzureAIAccounts()
@@ -97,7 +93,6 @@ func (c *deployAgentCmd) Run() error {
 		return nil
 	}
 
-	// Select AI account
 	accountOptions := make([]tap.SelectOption[string], len(accounts))
 	accountMap := make(map[string]AzureAIAccount)
 	for i, acc := range accounts {
@@ -119,7 +114,6 @@ func (c *deployAgentCmd) Run() error {
 	}
 	account := accountMap[selectedAccount]
 
-	// Step 2: List deployments in that account
 	spinner.Start("Loading model deployments...")
 	deployments := getAzureAIDeployments(account.ResourceGroup, account.Name)
 	spinner.Stop("", 0)
@@ -130,7 +124,6 @@ func (c *deployAgentCmd) Run() error {
 		return nil
 	}
 
-	// Select deployment
 	deploymentOptions := make([]tap.SelectOption[string], len(deployments))
 	deploymentMap := make(map[string]AzureAIDeployment)
 	for i, dep := range deployments {
@@ -156,7 +149,6 @@ func (c *deployAgentCmd) Run() error {
 	}
 	deployment := deploymentMap[selectedDeployment]
 
-	// Step 3: Deployment method
 	deployOptions := []tap.SelectOption[DeployMethod]{
 		{Value: DeployACI, Label: "Azure Container Instance", Hint: "Run once in a container"},
 		{Value: DeployPipeline, Label: "Azure Pipeline", Hint: "Run as CI/CD pipeline"},
@@ -171,7 +163,6 @@ func (c *deployAgentCmd) Run() error {
 		return nil
 	}
 
-	// Step 4: The task/prompt
 	prompt := tap.Text(ctx, tap.TextOptions{
 		Message:     "Task for the agent:",
 		Placeholder: "Review this PR and suggest improvements...",
@@ -181,7 +172,6 @@ func (c *deployAgentCmd) Run() error {
 		return nil
 	}
 
-	// Determine agent type from model
 	agentType := AgentCustom
 	modelLower := strings.ToLower(deployment.Model)
 	if strings.Contains(modelLower, "gpt") || strings.Contains(modelLower, "openai") {
@@ -190,7 +180,7 @@ func (c *deployAgentCmd) Run() error {
 		agentType = AgentClaude
 	}
 
-	config := DeployConfig{
+	dconfig := DeployConfig{
 		AgentType:     agentType,
 		DeployMethod:  deployMethod,
 		AgentName:     fmt.Sprintf("agent-%d", time.Now().Unix()),
@@ -203,16 +193,15 @@ func (c *deployAgentCmd) Run() error {
 		AIModel:       deployment.Model,
 	}
 
-	// Show summary
 	summaryText := fmt.Sprintf(`AI Account:  %s
 Model:       %s (%s)
 Method:      %s
 Task:        %s`,
-		config.AIAccount,
-		config.AIDeployment,
-		config.AIModel,
-		config.DeployMethod,
-		truncateStr(config.Prompt, 35),
+		dconfig.AIAccount,
+		dconfig.AIDeployment,
+		dconfig.AIModel,
+		dconfig.DeployMethod,
+		truncateStr(dconfig.Prompt, 35),
 	)
 	tap.Box(summaryText, "Deployment Summary", tap.BoxOptions{})
 
@@ -224,9 +213,8 @@ Task:        %s`,
 		return nil
 	}
 
-	// Get AI account key for the container
 	spinner.Start("Getting API key...")
-	apiKey := getAzureAIKey(config.ResourceGroup, config.AIAccount)
+	apiKey := getAzureAIKey(dconfig.ResourceGroup, dconfig.AIAccount)
 	if apiKey == "" {
 		spinner.Stop("Failed to get API key", 1)
 		waitForEnter()
@@ -234,38 +222,33 @@ Task:        %s`,
 	}
 	spinner.Stop("Ready", 0)
 
-	// Deploy based on method
-	switch config.DeployMethod {
+	switch dconfig.DeployMethod {
 	case DeployACI:
-		// Deploy to Azure Container Instances
 		spinner.Start("Deploying container...")
 
 		image := "python:3.11-slim"
 		envVars := []string{
-			fmt.Sprintf("AZURE_OPENAI_ENDPOINT=%s", config.AIEndpoint),
+			fmt.Sprintf("AZURE_OPENAI_ENDPOINT=%s", dconfig.AIEndpoint),
 			fmt.Sprintf("AZURE_OPENAI_API_KEY=%s", apiKey),
-			fmt.Sprintf("AZURE_OPENAI_DEPLOYMENT=%s", config.AIDeployment),
-			fmt.Sprintf("AGENT_PROMPT=%s", config.Prompt),
+			fmt.Sprintf("AZURE_OPENAI_DEPLOYMENT=%s", dconfig.AIDeployment),
+			fmt.Sprintf("AGENT_PROMPT=%s", dconfig.Prompt),
 		}
 
-		// Build the command to run in the container
-		script := generateAzureAgentScript(config)
+		script := generateAzureAgentScript(dconfig)
 
 		args := []string{
 			"container", "create",
-			"--resource-group", config.ResourceGroup,
-			"--name", config.AgentName,
+			"--resource-group", dconfig.ResourceGroup,
+			"--name", dconfig.AgentName,
 			"--image", image,
 			"--restart-policy", "Never",
-			"--location", config.Location,
+			"--location", dconfig.Location,
 		}
 
-		// Add environment variables
 		for _, env := range envVars {
 			args = append(args, "--environment-variables", env)
 		}
 
-		// Add the command to run
 		args = append(args, "--command-line", script)
 
 		aciCmd := exec.Command("az", args...)
@@ -276,15 +259,14 @@ Task:        %s`,
 		}
 		spinner.Stop("Container deployed!", 0)
 
-		// Show logs option
 		showLogs := tap.Confirm(ctx, tap.ConfirmOptions{
 			Message: "Stream container logs?",
 		})
 		if showLogs {
 			fmt.Println("\n--- Container Logs ---")
 			logsCmd := exec.Command("az", "container", "logs",
-				"--resource-group", config.ResourceGroup,
-				"--name", config.AgentName,
+				"--resource-group", dconfig.ResourceGroup,
+				"--name", dconfig.AgentName,
 				"--follow",
 			)
 			logsCmd.Stdout = os.Stdout
@@ -293,7 +275,6 @@ Task:        %s`,
 		}
 
 	case DeployPipeline:
-		// Create and run an Azure Pipeline with inline script
 		if !checkAzureDevOpsCLI() {
 			spinner.Stop("Azure DevOps CLI required", 1)
 			tap.Box("Install with: az extension add --name azure-devops", "Setup Required", tap.BoxOptions{})
@@ -301,7 +282,6 @@ Task:        %s`,
 			return nil
 		}
 
-		// Get org/project
 		orgURL := tap.Text(ctx, tap.TextOptions{
 			Message:     "Azure DevOps Org URL:",
 			Placeholder: "https://dev.azure.com/myorg",
@@ -313,7 +293,6 @@ Task:        %s`,
 
 		spinner.Start("Creating pipeline run...")
 
-		// Save pipeline YAML
 		tmpYAML := fmt.Sprintf(`trigger: none
 pool:
   vmImage: ubuntu-latest
@@ -334,7 +313,7 @@ steps:
     print(response.choices[0].message.content)
     "
   displayName: 'Run AI Agent'
-`, config.AIEndpoint, apiKey, config.AIDeployment, config.Prompt)
+`, dconfig.AIEndpoint, apiKey, dconfig.AIDeployment, dconfig.Prompt)
 
 		tmpFile := filepath.Join(os.TempDir(), "agent-pipeline.yml")
 		os.WriteFile(tmpFile, []byte(tmpYAML), 0644)
@@ -342,7 +321,7 @@ steps:
 		runCmd := exec.Command("az", "pipelines", "run",
 			"--org", orgURL,
 			"--project", project,
-			"--name", config.AgentName,
+			"--name", dconfig.AgentName,
 		)
 		output, err := runCmd.CombinedOutput()
 		if err != nil {
@@ -377,7 +356,6 @@ func checkAzureDevOpsCLI() bool {
 	return cmd.Run() == nil
 }
 
-// truncateStr truncates a string to maxLen with ellipsis
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -385,15 +363,12 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// waitForEnter waits for user to press Enter
 func waitForEnter() {
 	fmt.Print("\nPress Enter to continue...")
 	fmt.Scanln()
 }
 
-// getAzureAIAccounts lists Azure AI/OpenAI accounts
 func getAzureAIAccounts() []AzureAIAccount {
-	// List all cognitive services accounts (includes Azure OpenAI)
 	cmd := exec.Command("az", "cognitiveservices", "account", "list",
 		"--query", "[?kind=='OpenAI' || kind=='CognitiveServices'].{name:name, resourceGroup:resourceGroup, location:location, endpoint:properties.endpoint, kind:kind}",
 		"-o", "json",
@@ -404,13 +379,11 @@ func getAzureAIAccounts() []AzureAIAccount {
 	}
 
 	var accounts []AzureAIAccount
-	// Parse JSON output
 	lines := strings.TrimSpace(string(output))
 	if lines == "" || lines == "[]" {
 		return nil
 	}
 
-	// Simple JSON parsing for array of objects
 	type jsonAccount struct {
 		Name          string `json:"name"`
 		ResourceGroup string `json:"resourceGroup"`
@@ -420,7 +393,6 @@ func getAzureAIAccounts() []AzureAIAccount {
 	}
 	var jsonAccounts []jsonAccount
 
-	// Use json unmarshal
 	if err := parseJSON(output, &jsonAccounts); err != nil {
 		return nil
 	}
@@ -438,7 +410,6 @@ func getAzureAIAccounts() []AzureAIAccount {
 	return accounts
 }
 
-// getAzureAIDeployments lists model deployments in an Azure AI account
 func getAzureAIDeployments(resourceGroup, accountName string) []AzureAIDeployment {
 	cmd := exec.Command("az", "cognitiveservices", "account", "deployment", "list",
 		"--resource-group", resourceGroup,
@@ -478,7 +449,6 @@ func getAzureAIDeployments(resourceGroup, accountName string) []AzureAIDeploymen
 	return deployments
 }
 
-// getAzureAIKey gets the API key for an Azure AI account
 func getAzureAIKey(resourceGroup, accountName string) string {
 	cmd := exec.Command("az", "cognitiveservices", "account", "keys", "list",
 		"--resource-group", resourceGroup,
@@ -493,14 +463,11 @@ func getAzureAIKey(resourceGroup, accountName string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// parseJSON is a simple JSON parser helper
 func parseJSON(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)
 }
 
-// generateAzureAgentScript generates a script to run the agent using Azure OpenAI
-func generateAzureAgentScript(config DeployConfig) string {
-	// The script installs openai and runs a simple completion
+func generateAzureAgentScript(dconfig DeployConfig) string {
 	return fmt.Sprintf(`/bin/sh -c 'pip install openai && python3 -c "
 from openai import AzureOpenAI
 import os
@@ -517,10 +484,9 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
-"'`, strings.ReplaceAll(config.Prompt, `"`, `\"`))
+"'`, strings.ReplaceAll(dconfig.Prompt, `"`, `\"`))
 }
 
-// runDeployAgent creates a tea.Cmd that runs the deployment wizard
 func runDeployAgent() tea.Cmd {
 	dc := &deployAgentCmd{}
 	return tea.Exec(dc, func(err error) tea.Msg {
@@ -532,34 +498,30 @@ func runDeployAgent() tea.Cmd {
 	})
 }
 
-// deployToACIFromPalette deploys to Azure Container Instances from the palette wizard
-func deployToACIFromPalette(config DeployConfig, apiKey string) (string, error) {
+func deployToACIFromPalette(dconfig DeployConfig, apiKey string) (string, error) {
 	image := "python:3.11-slim"
 	envVars := []string{
-		fmt.Sprintf("AZURE_OPENAI_ENDPOINT=%s", config.AIEndpoint),
+		fmt.Sprintf("AZURE_OPENAI_ENDPOINT=%s", dconfig.AIEndpoint),
 		fmt.Sprintf("AZURE_OPENAI_API_KEY=%s", apiKey),
-		fmt.Sprintf("AZURE_OPENAI_DEPLOYMENT=%s", config.AIDeployment),
-		fmt.Sprintf("AGENT_PROMPT=%s", config.Prompt),
+		fmt.Sprintf("AZURE_OPENAI_DEPLOYMENT=%s", dconfig.AIDeployment),
+		fmt.Sprintf("AGENT_PROMPT=%s", dconfig.Prompt),
 	}
 
-	// Build the command to run in the container
-	script := generateAzureAgentScript(config)
+	script := generateAzureAgentScript(dconfig)
 
 	args := []string{
 		"container", "create",
-		"--resource-group", config.ResourceGroup,
-		"--name", config.AgentName,
+		"--resource-group", dconfig.ResourceGroup,
+		"--name", dconfig.AgentName,
 		"--image", image,
 		"--restart-policy", "Never",
-		"--location", config.Location,
+		"--location", dconfig.Location,
 	}
 
-	// Add environment variables
 	for _, env := range envVars {
 		args = append(args, "--environment-variables", env)
 	}
 
-	// Add the command to run
 	args = append(args, "--command-line", script)
 
 	aciCmd := exec.Command("az", args...)
@@ -569,26 +531,22 @@ func deployToACIFromPalette(config DeployConfig, apiKey string) (string, error) 
 	}
 
 	result := fmt.Sprintf("Container '%s' deployed successfully!\n\nResource Group: %s\nLocation: %s\nModel: %s\n\nTo view logs:\naz container logs --resource-group %s --name %s --follow",
-		config.AgentName,
-		config.ResourceGroup,
-		config.Location,
-		config.AIModel,
-		config.ResourceGroup,
-		config.AgentName,
+		dconfig.AgentName,
+		dconfig.ResourceGroup,
+		dconfig.Location,
+		dconfig.AIModel,
+		dconfig.ResourceGroup,
+		dconfig.AgentName,
 	)
 
 	return result, nil
 }
 
-// deployToPipelineFromPalette deploys to Azure Pipeline from the palette wizard
-func deployToPipelineFromPalette(config DeployConfig, apiKey string) (string, error) {
+func deployToPipelineFromPalette(dconfig DeployConfig, apiKey string) (string, error) {
 	if !checkAzureDevOpsCLI() {
 		return "", fmt.Errorf("Azure DevOps CLI extension is required.\n\nInstall with: az extension add --name azure-devops")
 	}
 
-	// For pipeline deployment, we need org and project info
-	// Since we can't prompt from here, return a helpful message
-	// In a real implementation, these would be additional wizard steps
 	pipelineYAML := fmt.Sprintf(`trigger: none
 pool:
   vmImage: ubuntu-latest
@@ -609,18 +567,18 @@ steps:
     print(response.choices[0].message.content)
     "
   displayName: 'Run AI Agent'
-`, config.AIEndpoint, apiKey, config.AIDeployment, strings.ReplaceAll(config.Prompt, "'", "'\\''"))
+`, dconfig.AIEndpoint, apiKey, dconfig.AIDeployment, strings.ReplaceAll(dconfig.Prompt, "'", "'\\''"))
 
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("agent-pipeline-%s.yml", config.AgentName))
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("agent-pipeline-%s.yml", dconfig.AgentName))
 	if err := os.WriteFile(tmpFile, []byte(pipelineYAML), 0644); err != nil {
 		return "", fmt.Errorf("failed to create pipeline YAML: %v", err)
 	}
 
 	result := fmt.Sprintf("Pipeline YAML created: %s\n\nTo deploy this pipeline:\n\n1. Push this YAML to your Azure DevOps repository\n2. Create a new pipeline in Azure DevOps using this YAML\n3. Set up the required service connection for Azure\n\nPipeline configuration:\n- Model: %s\n- Deployment: %s\n- Task: %s",
 		tmpFile,
-		config.AIModel,
-		config.AIDeployment,
-		truncateStr(config.Prompt, 60),
+		dconfig.AIModel,
+		dconfig.AIDeployment,
+		truncateStr(dconfig.Prompt, 60),
 	)
 
 	return result, nil

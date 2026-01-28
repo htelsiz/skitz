@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -124,7 +124,6 @@ Make reasonable assumptions for any missing information. Return only valid JSON,
 		t.Fatalf("Failed to parse mods output as JSON: %v\nOutput: %s", err, result)
 	}
 
-	// Check that expected parameters are present
 	if params["service"] == nil {
 		t.Error("Expected 'service' parameter")
 	}

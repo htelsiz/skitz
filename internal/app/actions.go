@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -8,6 +8,9 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/htelsiz/skitz/internal/config"
+	"github.com/htelsiz/skitz/internal/resources"
 )
 
 // QuickAction represents an action that can be triggered
@@ -17,12 +20,12 @@ type QuickAction struct {
 	Icon     string
 	Shortcut string
 	Builtin  bool
-	Handler  func(m *model) (tea.Cmd, bool) // Returns cmd and whether model was modified
-	Command  string                         // For custom shell actions
+	Handler  func(m *model) (tea.Cmd, bool)
+	Command  string
 }
 
 // buildQuickActions builds quick actions from config
-func buildQuickActions(cfg Config) []QuickAction {
+func buildQuickActions(cfg config.Config) []QuickAction {
 	var actions []QuickAction
 
 	builtinHandlers := map[string]struct {
@@ -70,7 +73,6 @@ func buildQuickActions(cfg Config) []QuickAction {
 
 // Built-in action handlers
 
-// actionRepeatLast repeats the last executed command
 func actionRepeatLast(m *model) (tea.Cmd, bool) {
 	if len(m.history) == 0 {
 		return m.showNotification("⚠️", "No command history yet", "warning"), true
@@ -78,7 +80,6 @@ func actionRepeatLast(m *model) (tea.Cmd, bool) {
 	lastCmd := m.history[0].Command
 	lastTool := m.history[0].Tool
 
-	// Show what we're about to run
 	displayCmd := lastCmd
 	if len(displayCmd) > 30 {
 		displayCmd = displayCmd[:27] + "..."
@@ -100,7 +101,6 @@ func actionRepeatLast(m *model) (tea.Cmd, bool) {
 	return tea.Batch(notifyCmd, execCmd), true
 }
 
-// actionCopyCommand copies the currently selected or last command
 func actionCopyCommand(m *model) (tea.Cmd, bool) {
 	var cmdText string
 	var source string
@@ -127,12 +127,10 @@ func actionCopyCommand(m *model) (tea.Cmd, bool) {
 	return m.showNotification("📋", "Copied "+source+": "+displayCmd, "success"), true
 }
 
-// actionSearch shows the search interface
 func actionSearch(m *model) (tea.Cmd, bool) {
 	return m.showNotification("🔍", "Search coming soon...", "info"), true
 }
 
-// actionEditFile opens the current resource file in editor
 func actionEditFile(m *model) (tea.Cmd, bool) {
 	res := m.currentResource()
 	if res == nil {
@@ -144,9 +142,26 @@ func actionEditFile(m *model) (tea.Cmd, bool) {
 		editor = "vim"
 	}
 
+	// If the resource is embedded-only, copy it to user dir first
+	filePath := filepath.Join(config.ResourcesDir, res.name+".md")
+	if res.embedded {
+		if err := os.MkdirAll(config.ResourcesDir, 0755); err != nil {
+			return m.showNotification("❌", "Failed to create resources dir: "+err.Error(), "error"), true
+		}
+		// Only copy if not already on disk
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			data, readErr := resources.Default.ReadFile(res.name + ".md")
+			if readErr != nil {
+				return m.showNotification("❌", "Failed to read embedded resource: "+readErr.Error(), "error"), true
+			}
+			if writeErr := os.WriteFile(filePath, data, 0644); writeErr != nil {
+				return m.showNotification("❌", "Failed to write resource: "+writeErr.Error(), "error"), true
+			}
+		}
+	}
+
 	notifyCmd := m.showNotification("📝", "Opening "+res.name+".md in "+editor, "info")
 
-	filePath := filepath.Join(resourcesDir, res.name+".md")
 	c := exec.Command(editor, filePath)
 	execCmd := tea.ExecProcess(c, func(err error) tea.Msg {
 		return commandDoneMsg{}
@@ -154,7 +169,6 @@ func actionEditFile(m *model) (tea.Cmd, bool) {
 	return tea.Batch(notifyCmd, execCmd), true
 }
 
-// actionToggleFavorite toggles favorite status for selected command
 func actionToggleFavorite(m *model) (tea.Cmd, bool) {
 	if m.currentView != viewDetail || len(m.commands) == 0 || m.cmdCursor >= len(m.commands) {
 		return m.showNotification("⚠️", "Select a command first", "warning"), true
@@ -168,7 +182,6 @@ func actionToggleFavorite(m *model) (tea.Cmd, bool) {
 
 	if m.favorites[cmdText] {
 		delete(m.favorites, cmdText)
-		// Remove from config
 		newFavs := []string{}
 		for _, f := range m.config.Favorites {
 			if f != cmdText {
@@ -176,17 +189,16 @@ func actionToggleFavorite(m *model) (tea.Cmd, bool) {
 			}
 		}
 		m.config.Favorites = newFavs
-		saveConfig(m.config)
+		config.Save(m.config)
 		return m.showNotification("☆", "Unfavorited: "+displayCmd, "info"), true
 	}
 
 	m.favorites[cmdText] = true
 	m.config.Favorites = append(m.config.Favorites, cmdText)
-	saveConfig(m.config)
+	config.Save(m.config)
 	return m.showNotification("⭐", "Favorited: "+displayCmd, "success"), true
 }
 
-// actionRefresh refreshes the resources
 func actionRefresh(m *model) (tea.Cmd, bool) {
 	m.resources = nil
 	m.loadResources()

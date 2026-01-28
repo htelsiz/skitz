@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// CommandMode determines how a command is executed.
 type CommandMode string
 
 const (
@@ -15,6 +16,7 @@ const (
 	CommandInteractive CommandMode = "interactive"
 )
 
+// CommandSpec describes a command to execute.
 type CommandSpec struct {
 	Command string
 	Mode    CommandMode

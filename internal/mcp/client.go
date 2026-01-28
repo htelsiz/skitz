@@ -1,4 +1,4 @@
-package main
+package mcp
 
 import (
 	"context"
@@ -11,8 +11,25 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// MCPClient wraps the mcp-go client for bldrspec-ai server
-type MCPClient struct {
+// ServerStatus holds the status of a connected MCP server.
+type ServerStatus struct {
+	Name                   string
+	URL                    string
+	Connected              bool
+	Tools                  []string
+	Prompts                []string
+	Resources              []string
+	ResourceTemplates      []string
+	Error                  string
+	ToolsError             string
+	PromptsError           string
+	ResourcesError         string
+	ResourceTemplatesError string
+	LastUpdated            time.Time
+}
+
+// Client wraps the mcp-go client for an MCP server.
+type Client struct {
 	client    *client.Client
 	serverURL string
 	connected bool
@@ -21,17 +38,18 @@ type MCPClient struct {
 // Default MCP server URL
 const defaultMCPServerURL = "http://localhost:8001/mcp/"
 
-// getMCPServerURL returns the MCP server URL from env or default
-func getMCPServerURL() string {
+// GetServerURL returns the MCP server URL from env or default.
+func GetServerURL() string {
 	if url := os.Getenv("BLDRSPEC_MCP_URL"); url != "" {
 		return url
 	}
 	return defaultMCPServerURL
 }
 
-// GetDefaultMCPServerURL returns the default MCP server URL
+// GetDefaultMCPServerURL returns the default MCP server URL.
+// Alias kept for backwards-compatibility with config callers.
 func GetDefaultMCPServerURL() string {
-	return getMCPServerURL()
+	return GetServerURL()
 }
 
 func buildInitializeRequest() mcp.InitializeRequest {
@@ -47,10 +65,10 @@ func buildInitializeRequest() mcp.InitializeRequest {
 	}
 }
 
-// NewMCPClient creates a new MCP client for the given server URL
-func NewMCPClient(serverURL string) (*MCPClient, error) {
+// NewClient creates a new MCP client for the given server URL.
+func NewClient(serverURL string) (*Client, error) {
 	if serverURL == "" {
-		serverURL = getMCPServerURL()
+		serverURL = GetServerURL()
 	}
 
 	c, err := client.NewStreamableHttpClient(serverURL)
@@ -58,20 +76,19 @@ func NewMCPClient(serverURL string) (*MCPClient, error) {
 		return nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
 
-	return &MCPClient{
+	return &Client{
 		client:    c,
 		serverURL: serverURL,
 		connected: false,
 	}, nil
 }
 
-// Connect initializes the MCP connection
-func (m *MCPClient) Connect(ctx context.Context) error {
+// Connect initializes the MCP connection.
+func (m *Client) Connect(ctx context.Context) error {
 	if m.connected {
 		return nil
 	}
 
-	// Start the transport connection
 	if err := m.client.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start MCP client: %w", err)
 	}
@@ -86,8 +103,8 @@ func (m *MCPClient) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the MCP connection
-func (m *MCPClient) Close() error {
+// Close closes the MCP connection.
+func (m *Client) Close() error {
 	if !m.connected {
 		return nil
 	}
@@ -95,13 +112,13 @@ func (m *MCPClient) Close() error {
 	return m.client.Close()
 }
 
-// IsConnected returns whether the client is connected
-func (m *MCPClient) IsConnected() bool {
+// IsConnected returns whether the client is connected.
+func (m *Client) IsConnected() bool {
 	return m.connected
 }
 
-// ListTools returns the available tools from the MCP server
-func (m *MCPClient) ListTools(ctx context.Context) ([]mcp.Tool, error) {
+// ListTools returns the available tools from the MCP server.
+func (m *Client) ListTools(ctx context.Context) ([]mcp.Tool, error) {
 	if !m.connected {
 		return nil, fmt.Errorf("MCP client not connected")
 	}
@@ -114,8 +131,8 @@ func (m *MCPClient) ListTools(ctx context.Context) ([]mcp.Tool, error) {
 	return result.Tools, nil
 }
 
-// CallTool calls an MCP tool with the given arguments and returns the result
-func (m *MCPClient) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
+// CallTool calls an MCP tool with the given arguments and returns the result.
+func (m *Client) CallTool(ctx context.Context, name string, args map[string]any) (*mcp.CallToolResult, error) {
 	if !m.connected {
 		return nil, fmt.Errorf("MCP client not connected")
 	}
@@ -133,7 +150,6 @@ func (m *MCPClient) CallTool(ctx context.Context, name string, args map[string]a
 	}
 
 	if result.IsError {
-		// Extract error message from content
 		if len(result.Content) > 0 {
 			if textContent, ok := result.Content[0].(mcp.TextContent); ok {
 				return nil, fmt.Errorf("tool error: %s", textContent.Text)
@@ -145,14 +161,13 @@ func (m *MCPClient) CallTool(ctx context.Context, name string, args map[string]a
 	return result, nil
 }
 
-// CallToolString calls a tool and returns the text content as a string
-func (m *MCPClient) CallToolString(ctx context.Context, name string, args map[string]any) (string, error) {
+// CallToolString calls a tool and returns the text content as a string.
+func (m *Client) CallToolString(ctx context.Context, name string, args map[string]any) (string, error) {
 	result, err := m.CallTool(ctx, name, args)
 	if err != nil {
 		return "", err
 	}
 
-	// Extract text from content
 	for _, content := range result.Content {
 		if textContent, ok := content.(mcp.TextContent); ok {
 			return textContent.Text, nil
@@ -162,14 +177,13 @@ func (m *MCPClient) CallToolString(ctx context.Context, name string, args map[st
 	return "", fmt.Errorf("no text content in tool result")
 }
 
-// CallToolJSON calls a tool and unmarshals the result into the given target
-func (m *MCPClient) CallToolJSON(ctx context.Context, name string, args map[string]any, target any) error {
+// CallToolJSON calls a tool and unmarshals the result into the given target.
+func (m *Client) CallToolJSON(ctx context.Context, name string, args map[string]any, target any) error {
 	result, err := m.CallTool(ctx, name, args)
 	if err != nil {
 		return err
 	}
 
-	// Try structured content first
 	if result.StructuredContent != nil {
 		data, err := json.Marshal(result.StructuredContent)
 		if err != nil {
@@ -178,7 +192,6 @@ func (m *MCPClient) CallToolJSON(ctx context.Context, name string, args map[stri
 		return json.Unmarshal(data, target)
 	}
 
-	// Fall back to text content (assuming JSON)
 	for _, content := range result.Content {
 		if textContent, ok := content.(mcp.TextContent); ok {
 			return json.Unmarshal([]byte(textContent.Text), target)
@@ -188,25 +201,24 @@ func (m *MCPClient) CallToolJSON(ctx context.Context, name string, args map[stri
 	return fmt.Errorf("no content in tool result")
 }
 
-// Ping checks if the MCP server is reachable
-func (m *MCPClient) Ping(ctx context.Context) error {
+// Ping checks if the MCP server is reachable.
+func (m *Client) Ping(ctx context.Context) error {
 	if !m.connected {
 		return fmt.Errorf("MCP client not connected")
 	}
 	return m.client.Ping(ctx)
 }
 
-// GetServerInfo returns information about the connected MCP server
-func (m *MCPClient) GetServerInfo() (name string, sessionID string) {
+// GetServerInfo returns information about the connected MCP server.
+func (m *Client) GetServerInfo() (name string, sessionID string) {
 	if !m.connected {
 		return "", ""
 	}
 	return "bldrspec-ai", m.client.GetSessionId()
 }
 
-// FetchMCPTools connects to an MCP server and returns the available tools.
-// This is a standalone function (like FetchMCPServerStatus) that creates its own connection.
-func FetchMCPTools(ctx context.Context, url string) ([]mcp.Tool, error) {
+// FetchTools connects to an MCP server and returns the available tools.
+func FetchTools(ctx context.Context, url string) ([]mcp.Tool, error) {
 	if url == "" {
 		return nil, fmt.Errorf("missing server URL")
 	}
@@ -233,9 +245,9 @@ func FetchMCPTools(ctx context.Context, url string) ([]mcp.Tool, error) {
 	return result.Tools, nil
 }
 
-// FetchMCPServerStatus connects to the given MCP server and returns status data.
-func FetchMCPServerStatus(ctx context.Context, name string, url string) MCPServerStatus {
-	status := MCPServerStatus{
+// FetchServerStatus connects to the given MCP server and returns status data.
+func FetchServerStatus(ctx context.Context, name string, url string) ServerStatus {
+	status := ServerStatus{
 		Name:        name,
 		URL:         url,
 		Connected:   false,
@@ -291,11 +303,11 @@ func FetchMCPServerStatus(ctx context.Context, name string, url string) MCPServe
 	} else {
 		status.Resources = make([]string, len(resources.Resources))
 		for i, resource := range resources.Resources {
-			name := resource.Name
-			if name == "" {
-				name = resource.URI
+			rname := resource.Name
+			if rname == "" {
+				rname = resource.URI
 			}
-			status.Resources[i] = name
+			status.Resources[i] = rname
 		}
 	}
 
@@ -313,16 +325,16 @@ func FetchMCPServerStatus(ctx context.Context, name string, url string) MCPServe
 }
 
 // Global MCP client instance (lazy initialized)
-var globalMCPClient *MCPClient
+var globalClient *Client
 
-// GetMCPClient returns the global MCP client, creating it if necessary
-func GetMCPClient() (*MCPClient, error) {
-	if globalMCPClient != nil && globalMCPClient.IsConnected() {
-		return globalMCPClient, nil
+// GetClient returns the global MCP client, creating it if necessary.
+func GetClient() (*Client, error) {
+	if globalClient != nil && globalClient.IsConnected() {
+		return globalClient, nil
 	}
 
 	var err error
-	globalMCPClient, err = NewMCPClient("")
+	globalClient, err = NewClient("")
 	if err != nil {
 		return nil, err
 	}
@@ -330,17 +342,17 @@ func GetMCPClient() (*MCPClient, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := globalMCPClient.Connect(ctx); err != nil {
+	if err := globalClient.Connect(ctx); err != nil {
 		return nil, err
 	}
 
-	return globalMCPClient, nil
+	return globalClient, nil
 }
 
-// CloseMCPClient closes the global MCP client
-func CloseMCPClient() {
-	if globalMCPClient != nil {
-		globalMCPClient.Close()
-		globalMCPClient = nil
+// CloseClient closes the global MCP client.
+func CloseClient() {
+	if globalClient != nil {
+		globalClient.Close()
+		globalClient = nil
 	}
 }

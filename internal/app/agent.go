@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -15,6 +15,9 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/yarlson/tap"
+
+	"github.com/htelsiz/skitz/internal/config"
+	mcppkg "github.com/htelsiz/skitz/internal/mcp"
 )
 
 // BIAJuniorAgentResult represents the result from bia_junior_agent
@@ -24,7 +27,7 @@ type BIAJuniorAgentResult struct {
 
 // ReviewCodeWithBIA sends code to the BIA Junior Agent for review via MCP
 func ReviewCodeWithBIA(ctx context.Context, code string) (string, error) {
-	client, err := GetMCPClient()
+	client, err := mcppkg.GetClient()
 	if err != nil {
 		return "", fmt.Errorf("failed to get MCP client: %w", err)
 	}
@@ -36,20 +39,16 @@ func ReviewCodeWithBIA(ctx context.Context, code string) (string, error) {
 		return "", fmt.Errorf("failed to call bia_junior_agent: %w", err)
 	}
 
-	// Extract text content from result
 	return extractTextFromResult(result)
 }
 
 // ReviewCodeWithBIAStream sends code to BIA and streams the response
-// For now, this is non-streaming since MCP tool calls are request/response
 func ReviewCodeWithBIAStream(ctx context.Context, code string, onChunk func(string)) error {
 	response, err := ReviewCodeWithBIA(ctx, code)
 	if err != nil {
 		return err
 	}
 
-	// Simulate streaming by sending the whole response
-	// TODO: Implement true streaming if MCP supports it
 	onChunk(response)
 	return nil
 }
@@ -60,7 +59,6 @@ func extractTextFromResult(result *mcp.CallToolResult) (string, error) {
 		return "", fmt.Errorf("nil result")
 	}
 
-	// Check for structured content first
 	if result.StructuredContent != nil {
 		if m, ok := result.StructuredContent.(map[string]any); ok {
 			if feedback, ok := m["feedback"].(string); ok {
@@ -72,7 +70,6 @@ func extractTextFromResult(result *mcp.CallToolResult) (string, error) {
 		}
 	}
 
-	// Fall back to text content
 	var texts []string
 	for _, content := range result.Content {
 		if textContent, ok := content.(mcp.TextContent); ok {
@@ -92,7 +89,7 @@ func CheckMCPServer() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	client, err := GetMCPClient()
+	client, err := mcppkg.GetClient()
 	if err != nil {
 		return false
 	}
@@ -105,7 +102,7 @@ func GetAvailableMCPTools() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	client, err := GetMCPClient()
+	client, err := mcppkg.GetClient()
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +122,7 @@ func GetAvailableMCPTools() ([]string, error) {
 // biaCodeReviewCmd implements tea.ExecCommand for BIA code review
 type biaCodeReviewCmd struct {
 	success     bool
-	interaction AgentInteraction
+	interaction config.AgentInteraction
 }
 
 func (c *biaCodeReviewCmd) Run() error {
@@ -134,7 +131,6 @@ func (c *biaCodeReviewCmd) Run() error {
 	fmt.Print("\033[H\033[2J")
 	tap.Intro("🔍 BIA Code Review")
 
-	// Check MCP server connection
 	spinner := tap.NewSpinner(tap.SpinnerOptions{})
 	spinner.Start("Connecting to MCP server...")
 
@@ -146,12 +142,10 @@ func (c *biaCodeReviewCmd) Run() error {
 	}
 	spinner.Stop("Connected to MCP server", 1)
 
-	// Restore terminal for input
 	stty := exec.Command("stty", "sane")
 	stty.Stdin = os.Stdin
 	stty.Run()
 
-	// Ask for input method
 	fmt.Println()
 	inputOptions := []tap.SelectOption[string]{
 		{Value: "file", Label: "Enter file path", Hint: "Review a file from disk"},
@@ -166,7 +160,6 @@ func (c *biaCodeReviewCmd) Run() error {
 	reader := bufio.NewReader(os.Stdin)
 
 	if inputType == "file" {
-		// File path mode
 		filePath := tap.Text(ctx, tap.TextOptions{
 			Message:     "File path:",
 			Placeholder: "e.g., ./main.py or /path/to/file.py",
@@ -177,7 +170,6 @@ func (c *biaCodeReviewCmd) Run() error {
 			return nil
 		}
 
-		// Expand ~ to home directory
 		if strings.HasPrefix(filePath, "~/") {
 			home, _ := os.UserHomeDir()
 			filePath = home + filePath[1:]
@@ -191,12 +183,10 @@ func (c *biaCodeReviewCmd) Run() error {
 		}
 		code = string(content)
 	} else {
-		// Restore terminal again after tap.Select (it uses raw mode)
 		stty := exec.Command("stty", "sane")
 		stty.Stdin = os.Stdin
 		stty.Run()
 
-		// Paste mode with double-enter to submit
 		fmt.Println("\n📝 Paste your code below.")
 		fmt.Println("   Press Enter twice on an empty line to submit.")
 		fmt.Println()
@@ -214,7 +204,6 @@ func (c *biaCodeReviewCmd) Run() error {
 			if trimmed == "" {
 				emptyLineCount++
 				if emptyLineCount >= 2 {
-					// Double empty line - submit
 					break
 				}
 				lines = append(lines, line)
@@ -235,7 +224,6 @@ func (c *biaCodeReviewCmd) Run() error {
 	lineCount := strings.Count(code, "\n") + 1
 	fmt.Printf("\n📊 Reviewing %d lines of code...\n\n", lineCount)
 
-	// Call BIA Junior Agent
 	reviewCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
@@ -245,14 +233,12 @@ func (c *biaCodeReviewCmd) Run() error {
 	feedback, err := ReviewCodeWithBIA(reviewCtx, code)
 	spinner2.Stop("Analysis complete", 1)
 
-	// Track the interaction
-	c.interaction = AgentInteraction{
+	c.interaction = config.AgentInteraction{
 		Agent:     "BIA Junior",
 		Action:    "Code Review",
 		Timestamp: time.Now(),
 	}
 
-	// Truncate input for storage (first 100 chars)
 	inputSummary := strings.TrimSpace(code)
 	if len(inputSummary) > 100 {
 		inputSummary = inputSummary[:100] + "..."
@@ -267,7 +253,6 @@ func (c *biaCodeReviewCmd) Run() error {
 		return nil
 	}
 
-	// Truncate output for storage (first 200 chars)
 	outputSummary := strings.TrimSpace(feedback)
 	if len(outputSummary) > 200 {
 		outputSummary = outputSummary[:200] + "..."
@@ -275,21 +260,18 @@ func (c *biaCodeReviewCmd) Run() error {
 	c.interaction.Output = outputSummary
 	c.interaction.Success = true
 
-	// Display feedback with glamour markdown rendering
 	fmt.Println()
 	rendered, err := renderMarkdown(feedback)
 	if err != nil {
-		fmt.Println(feedback) // Fallback to plain text
+		fmt.Println(feedback)
 	} else {
 		fmt.Println(rendered)
 	}
 
-	// Restore terminal before waiting for input
 	stty = exec.Command("stty", "sane")
 	stty.Stdin = os.Stdin
 	stty.Run()
 
-	// Wait for user to read before returning
 	waitForEnterMCP()
 
 	tap.Outro("Review complete")
@@ -301,11 +283,9 @@ func (c biaCodeReviewCmd) SetStdin(r io.Reader)  {}
 func (c biaCodeReviewCmd) SetStdout(w io.Writer) {}
 func (c biaCodeReviewCmd) SetStderr(w io.Writer) {}
 
-// runBIACodeReview creates a tea.Cmd that runs the BIA code review
 func runBIACodeReview() tea.Cmd {
 	cmd := &biaCodeReviewCmd{}
 	return tea.Exec(cmd, func(err error) tea.Msg {
-		// Return batch of messages to update both command and agent history
 		return tea.BatchMsg{
 			func() tea.Msg {
 				return commandDoneMsg{
@@ -323,18 +303,15 @@ func runBIACodeReview() tea.Cmd {
 	})
 }
 
-// waitForEnterMCP waits for user to press enter
 func waitForEnterMCP() {
 	fmt.Print("\nPress Enter to continue...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
 
-// renderMarkdown renders markdown text using glamour with full terminal width
 func renderMarkdown(text string) (string, error) {
-	// Get terminal width
-	width := 120 // default
+	width := 120
 	if w, _, err := getTerminalSize(); err == nil && w > 0 {
-		width = w - 4 // leave some margin
+		width = w - 4
 	}
 
 	r, err := glamour.NewTermRenderer(
@@ -347,7 +324,6 @@ func renderMarkdown(text string) (string, error) {
 	return r.Render(text)
 }
 
-// getTerminalSize returns the terminal dimensions
 func getTerminalSize() (int, int, error) {
 	cmd := exec.Command("stty", "size")
 	cmd.Stdin = os.Stdin
@@ -367,7 +343,7 @@ type mcpToolCmd struct {
 	serverURL   string
 	tool        mcp.Tool
 	success     bool
-	interaction AgentInteraction
+	interaction config.AgentInteraction
 }
 
 func (c *mcpToolCmd) Run() error {
@@ -376,27 +352,22 @@ func (c *mcpToolCmd) Run() error {
 	fmt.Print("\033[H\033[2J")
 	tap.Intro(fmt.Sprintf("⚡ %s", c.tool.Name))
 
-	// Show tool description
 	if c.tool.Description != "" {
 		fmt.Printf("\n%s\n", c.tool.Description)
 	}
 
-	// Restore terminal for input
 	stty := exec.Command("stty", "sane")
 	stty.Stdin = os.Stdin
 	stty.Run()
 
-	// Collect parameters if the tool has any
 	args := make(map[string]any)
 
 	if len(c.tool.InputSchema.Properties) > 0 {
-		// Build required map for quick lookup
 		required := make(map[string]bool)
 		for _, r := range c.tool.InputSchema.Required {
 			required[r] = true
 		}
 
-		// Sort parameter names for stable order
 		var paramNames []string
 		for paramName := range c.tool.InputSchema.Properties {
 			paramNames = append(paramNames, paramName)
@@ -449,14 +420,12 @@ func (c *mcpToolCmd) Run() error {
 		}
 	}
 
-	// Track the interaction
-	c.interaction = AgentInteraction{
+	c.interaction = config.AgentInteraction{
 		Agent:     c.serverName,
 		Action:    c.tool.Name,
 		Timestamp: time.Now(),
 	}
 
-	// Call the MCP tool
 	fmt.Printf("\n🔄 Calling %s...\n\n", c.tool.Name)
 
 	callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
@@ -465,8 +434,7 @@ func (c *mcpToolCmd) Run() error {
 	spinner := tap.NewSpinner(tap.SpinnerOptions{})
 	spinner.Start("Executing tool...")
 
-	// Create a new client for this call
-	client, err := NewMCPClient(c.serverURL)
+	client, err := mcppkg.NewClient(c.serverURL)
 	if err != nil {
 		spinner.Stop("", 0)
 		c.interaction.Success = false
@@ -497,7 +465,6 @@ func (c *mcpToolCmd) Run() error {
 		return nil
 	}
 
-	// Extract and display result
 	output, err := extractTextFromResult(result)
 	if err != nil {
 		c.interaction.Success = false
@@ -507,7 +474,6 @@ func (c *mcpToolCmd) Run() error {
 		return nil
 	}
 
-	// Truncate output for storage
 	outputSummary := strings.TrimSpace(output)
 	if len(outputSummary) > 200 {
 		outputSummary = outputSummary[:200] + "..."
@@ -515,16 +481,14 @@ func (c *mcpToolCmd) Run() error {
 	c.interaction.Output = outputSummary
 	c.interaction.Success = true
 
-	// Display result with glamour markdown rendering
 	fmt.Println()
 	rendered, err := renderMarkdown(output)
 	if err != nil {
-		fmt.Println(output) // Fallback to plain text
+		fmt.Println(output)
 	} else {
 		fmt.Println(rendered)
 	}
 
-	// Restore terminal before waiting for input
 	stty = exec.Command("stty", "sane")
 	stty.Stdin = os.Stdin
 	stty.Run()
@@ -539,7 +503,6 @@ func (c mcpToolCmd) SetStdin(r io.Reader)  {}
 func (c mcpToolCmd) SetStdout(w io.Writer) {}
 func (c mcpToolCmd) SetStderr(w io.Writer) {}
 
-// runMCPTool creates a tea.Cmd that runs an MCP tool
 func runMCPTool(serverName string, serverURL string, tool mcp.Tool) tea.Cmd {
 	cmd := &mcpToolCmd{serverName: serverName, serverURL: serverURL, tool: tool}
 	return tea.Exec(cmd, func(err error) tea.Msg {

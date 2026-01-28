@@ -1,7 +1,7 @@
 # Skitz TUI - Development Context
 
 ## Project Overview
-Skitz is a terminal UI application for browsing command reference documentation stored as markdown files in `~/dotfiles/resources/`. Each resource (docker, git, claude) has:
+Skitz is a terminal UI application for browsing command reference documentation stored as markdown files in `~/.config/skitz/resources/`. Each resource (docker, git, claude) has:
 - `{name}.md` - Quick reference (compact command list)
 - `{name}-detail.md` - Detailed documentation with `## Section` headers
 
@@ -57,7 +57,7 @@ cli/skitz/
 
 ## Resources Location
 ```go
-resourcesDir = filepath.Join(home, "dotfiles", "resources")
+resourcesDir = filepath.Join(home, ".config", "skitz", "resources")
 ```
 
 ## Color Palette
@@ -86,7 +86,7 @@ Focus 1 (Right pane - Sections):
 
 ## Build & Run
 ```bash
-cd ~/dotfiles/cli/skitz
+cd ~/projects/skitz
 go build -o skitz .
 ./skitz           # Start with resource list
 ./skitz docker    # Start with docker selected

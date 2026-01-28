@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -15,6 +15,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mark3labs/mcp-go/mcp"
 	openai "github.com/sashabaranov/go-openai"
+
+	mcppkg "github.com/htelsiz/skitz/internal/mcp"
 )
 
 // PaletteItem represents an item in the command palette
@@ -23,11 +25,10 @@ type PaletteItem struct {
 	Icon        string
 	Title       string
 	Subtitle    string
-	Category    string // "action", "resource", "history", "favorite"
-	Shortcut    string // Optional shortcut hint
+	Category    string
+	Shortcut    string
 	Handler     func(m *model) tea.Cmd
-	ResourceIdx int // For resource items
-	// MCP tool info (for tools that need parameters)
+	ResourceIdx int
 	MCPTool      *mcp.Tool
 	MCPServer    string
 	MCPServerURL string
@@ -37,12 +38,12 @@ type PaletteItem struct {
 type PaletteState int
 
 const (
-	PaletteStateIdle            PaletteState = iota // Closed
-	PaletteStateSearching                            // Open, showing command list
-	PaletteStateCollectingParams                     // Collecting tool parameters with form
-	PaletteStateAIInput                              // Collecting AI task description
-	PaletteStateExecuting                            // Executing tool (showing spinner)
-	PaletteStateShowingResult                        // Showing execution result
+	PaletteStateIdle             PaletteState = iota
+	PaletteStateSearching
+	PaletteStateCollectingParams
+	PaletteStateAIInput
+	PaletteStateExecuting
+	PaletteStateShowingResult
 )
 
 // Palette state
@@ -53,41 +54,33 @@ type Palette struct {
 	Filtered    []PaletteItem
 	Cursor      int
 	InputForm   *huh.Form
-	InputValue  string // Bound to form input
+	InputValue  string
 	PendingTool *mcpPendingTool
-	// Wizard state for multi-step actions
 	WizardState *wizardState
-	// Loading/execution state
 	LoadingText string
 	ResultTitle string
 	ResultText  string
 }
 
-// mcpPendingTool holds state for an MCP tool waiting for parameter input
 type mcpPendingTool struct {
 	ServerName string
 	ServerURL  string
 	Tool       mcp.Tool
 	Args       map[string]any
-	// Form field values (string pointers for huh binding)
 	FormValues map[string]*string
-	// Natural language task description (for AI mode)
-	AITask string
+	AITask     string
 }
 
-// wizardState holds state for multi-step wizards (BIA, Deploy, etc.)
 type wizardState struct {
-	Type    string         // "bia" or "deploy"
-	Step    int            // Current step number
-	Data    map[string]any // Collected data
-	Options []string       // For select options
+	Type    string
+	Step    int
+	Data    map[string]any
+	Options []string
 }
 
-// buildPaletteItems creates all available palette items
 func (m *model) buildPaletteItems() []PaletteItem {
 	var items []PaletteItem
 
-	// BIA Code Review action
 	items = append(items, PaletteItem{
 		ID:       "action:bia_review",
 		Icon:     "🔍",
@@ -99,7 +92,6 @@ func (m *model) buildPaletteItems() []PaletteItem {
 		},
 	})
 
-	// Deploy Agent action
 	items = append(items, PaletteItem{
 		ID:       "action:deploy_agent",
 		Icon:     "🚀",
@@ -111,7 +103,6 @@ func (m *model) buildPaletteItems() []PaletteItem {
 		},
 	})
 
-	// Create Script action
 	items = append(items, PaletteItem{
 		ID:       "action:create_script",
 		Icon:     "📜",
@@ -123,20 +114,18 @@ func (m *model) buildPaletteItems() []PaletteItem {
 		},
 	})
 
-	// Dynamic MCP tools
 	items = append(items, m.getMCPToolItems()...)
 
 	return items
 }
 
-// getMCPToolItems fetches tools from all configured MCP servers and returns palette items
 func (m *model) getMCPToolItems() []PaletteItem {
 	var items []PaletteItem
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	for _, server := range m.config.MCP.Servers {
-		tools, err := FetchMCPTools(ctx, server.URL)
+		tools, err := mcppkg.FetchTools(ctx, server.URL)
 		if err != nil {
 			continue
 		}
@@ -147,9 +136,7 @@ func (m *model) getMCPToolItems() []PaletteItem {
 	return items
 }
 
-// mcpToolToPaletteItem converts an MCP tool to a PaletteItem
 func (m *model) mcpToolToPaletteItem(serverName string, serverURL string, tool mcp.Tool) PaletteItem {
-	// Store tool info for parameter handling
 	toolCopy := tool
 	return PaletteItem{
 		ID:           fmt.Sprintf("mcp:%s:%s", serverName, tool.Name),
@@ -160,18 +147,15 @@ func (m *model) mcpToolToPaletteItem(serverName string, serverURL string, tool m
 		MCPTool:      &toolCopy,
 		MCPServer:    serverName,
 		MCPServerURL: serverURL,
-		// Handler is nil - we handle MCP tools specially to support parameter input
 	}
 }
 
-// executeMCPToolWithArgs executes an MCP tool with pre-collected args and displays output
 func executeMCPToolWithArgs(serverURL string, toolName string, args map[string]any) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		// Connect to MCP server
-		client, err := NewMCPClient(serverURL)
+		client, err := mcppkg.NewClient(serverURL)
 		if err != nil {
 			return staticOutputMsg{
 				title:  toolName,
@@ -187,7 +171,6 @@ func executeMCPToolWithArgs(serverURL string, toolName string, args map[string]a
 		}
 		defer client.Close()
 
-		// Call the tool
 		result, err := client.CallTool(ctx, toolName, args)
 		if err != nil {
 			return staticOutputMsg{
@@ -196,7 +179,6 @@ func executeMCPToolWithArgs(serverURL string, toolName string, args map[string]a
 			}
 		}
 
-		// Extract text from result
 		output, err := extractTextFromResult(result)
 		if err != nil {
 			return staticOutputMsg{
@@ -212,14 +194,12 @@ func executeMCPToolWithArgs(serverURL string, toolName string, args map[string]a
 	}
 }
 
-// startMCPToolWithAI invokes an MCP tool using an AI agent
 func (m *model) startMCPToolWithAI(item PaletteItem) tea.Cmd {
 	tool := item.MCPTool
 	if tool == nil {
 		return nil
 	}
 
-	// Store the tool for later execution
 	m.palette.PendingTool = &mcpPendingTool{
 		ServerName: item.MCPServer,
 		ServerURL:  item.MCPServerURL,
@@ -228,14 +208,12 @@ func (m *model) startMCPToolWithAI(item PaletteItem) tea.Cmd {
 		FormValues: make(map[string]*string),
 	}
 
-	// Transition to AI input state
 	m.palette.State = PaletteStateAIInput
-	m.palette.Query = "" // Clear any existing search
+	m.palette.Query = ""
 
 	return nil
 }
 
-// startMCPToolInput initializes input mode for an MCP tool that needs parameters
 func (m *model) startMCPToolInput(item PaletteItem) tea.Cmd {
 	tool := item.MCPTool
 	if tool == nil {
@@ -243,14 +221,11 @@ func (m *model) startMCPToolInput(item PaletteItem) tea.Cmd {
 	}
 
 	if len(tool.InputSchema.Properties) == 0 {
-		// No parameters needed, execute directly
 		return executeMCPToolWithArgs(item.MCPServerURL, tool.Name, nil)
 	}
 
-	// Initialize pending tool state with form values
 	formValues := make(map[string]*string)
 
-	// Create string pointers for each parameter (for huh binding)
 	for paramName := range tool.InputSchema.Properties {
 		val := ""
 		formValues[paramName] = &val
@@ -264,19 +239,15 @@ func (m *model) startMCPToolInput(item PaletteItem) tea.Cmd {
 		FormValues: formValues,
 	}
 
-	// Build comprehensive form with all parameters
 	return m.buildParameterForm()
 }
 
-// buildParameterForm creates a comprehensive form with all parameters
-// buildParameterFormWithValues builds the parameter form with AI-prefilled values
 func (m *model) buildParameterFormWithValues(aiParams map[string]interface{}) tea.Cmd {
 	pt := m.palette.PendingTool
 	if pt == nil {
 		return nil
 	}
 
-	// First initialize all parameters with empty strings
 	for paramName := range pt.Tool.InputSchema.Properties {
 		if pt.FormValues[paramName] == nil {
 			val := ""
@@ -284,9 +255,7 @@ func (m *model) buildParameterFormWithValues(aiParams map[string]interface{}) te
 		}
 	}
 
-	// Then fill in AI-determined values
 	for paramName, paramValue := range aiParams {
-		// Convert to string
 		var strValue string
 		switch v := paramValue.(type) {
 		case string:
@@ -298,18 +267,15 @@ func (m *model) buildParameterFormWithValues(aiParams map[string]interface{}) te
 		case bool:
 			strValue = fmt.Sprintf("%t", v)
 		default:
-			// For complex types, use JSON encoding
 			bytes, _ := json.Marshal(v)
 			strValue = string(bytes)
 		}
 
-		// Update the value if this parameter exists
 		if ptr := pt.FormValues[paramName]; ptr != nil {
 			*ptr = strValue
 		}
 	}
 
-	// Now build the form (which will use the pre-filled values)
 	return m.buildParameterForm()
 }
 
@@ -319,32 +285,27 @@ func (m *model) buildParameterForm() tea.Cmd {
 		return nil
 	}
 
-	// Build required map for quick lookup
 	required := make(map[string]bool)
 	for _, r := range pt.Tool.InputSchema.Required {
 		required[r] = true
 	}
 
-	// Collect field definitions in stable order: required first (alphabetically), then optional (alphabetically)
 	var fields []huh.Field
 	var paramNames []string
 
-	// Get all parameter names
 	for paramName := range pt.Tool.InputSchema.Properties {
 		paramNames = append(paramNames, paramName)
 	}
 
-	// Sort: required params first (alphabetically), then optional params (alphabetically)
 	sort.Slice(paramNames, func(i, j int) bool {
 		reqI := required[paramNames[i]]
 		reqJ := required[paramNames[j]]
 		if reqI != reqJ {
-			return reqI // Required comes first
+			return reqI
 		}
-		return paramNames[i] < paramNames[j] // Alphabetical within each group
+		return paramNames[i] < paramNames[j]
 	})
 
-	// Build form fields based on JSON schema
 	for _, paramName := range paramNames {
 		paramDef := pt.Tool.InputSchema.Properties[paramName]
 		paramMap, ok := paramDef.(map[string]interface{})
@@ -362,7 +323,6 @@ func (m *model) buildParameterForm() tea.Cmd {
 		return nil
 	}
 
-	// Create form with all fields in a single group
 	m.palette.InputForm = huh.NewForm(huh.NewGroup(fields...)).
 		WithWidth(100).
 		WithShowHelp(true).
@@ -371,18 +331,15 @@ func (m *model) buildParameterForm() tea.Cmd {
 
 	m.palette.State = PaletteStateCollectingParams
 
-	// Initialize the form
 	return m.palette.InputForm.Init()
 }
 
-// createFormField creates the appropriate huh field based on JSON schema type
 func (m *model) createFormField(paramName string, paramMap map[string]interface{}, isRequired bool) huh.Field {
 	pt := m.palette.PendingTool
 	if pt == nil {
 		return nil
 	}
 
-	// Extract schema properties
 	description := ""
 	if desc, ok := paramMap["description"].(string); ok {
 		description = desc
@@ -393,16 +350,13 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 		paramType = t
 	}
 
-	// Build title with required indicator
 	title := paramName
 	if isRequired {
 		title = paramName + " *"
 	}
 
-	// Get value pointer for binding
 	valuePtr := pt.FormValues[paramName]
 
-	// Handle enum fields (select dropdown)
 	if enumVal, ok := paramMap["enum"].([]interface{}); ok && len(enumVal) > 0 {
 		options := make([]huh.Option[string], len(enumVal))
 		for i, v := range enumVal {
@@ -416,7 +370,6 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 			Value(valuePtr)
 	}
 
-	// Handle boolean fields (confirm)
 	if paramType == "boolean" {
 		boolPtr := new(bool)
 		return huh.NewConfirm().
@@ -425,21 +378,17 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 			Value(boolPtr)
 	}
 
-	// Handle text area for long strings
 	if paramType == "string" {
-		// Check if this is likely a long text field
 		maxLength := 0
 		if ml, ok := paramMap["maxLength"].(float64); ok {
 			maxLength = int(ml)
 		}
 
-		// Get examples/placeholder
 		placeholder := description
 		if examples, ok := paramMap["examples"].([]interface{}); ok && len(examples) > 0 {
 			placeholder = fmt.Sprintf("%v", examples[0])
 		}
 
-		// Use text area for long content or if description suggests it
 		useLongText := maxLength > 200 ||
 			strings.Contains(strings.ToLower(paramName), "content") ||
 			strings.Contains(strings.ToLower(paramName), "text") ||
@@ -455,14 +404,12 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 				Value(valuePtr)
 		}
 
-		// Regular input with validation
 		input := huh.NewInput().
 			Title(title).
 			Description(description).
 			Placeholder(placeholder).
 			Value(valuePtr)
 
-		// Add validation for required fields
 		if isRequired {
 			input = input.Validate(func(s string) error {
 				if strings.TrimSpace(s) == "" {
@@ -475,7 +422,6 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 		return input
 	}
 
-	// Handle number fields
 	if paramType == "number" || paramType == "integer" {
 		input := huh.NewInput().
 			Title(title).
@@ -483,7 +429,6 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 			Placeholder("Enter a number").
 			Value(valuePtr)
 
-		// Add numeric validation
 		input = input.Validate(func(s string) error {
 			if s == "" && !isRequired {
 				return nil
@@ -506,27 +451,23 @@ func (m *model) createFormField(paramName string, paramMap map[string]interface{
 		return input
 	}
 
-	// Default: string input
 	return huh.NewInput().
 		Title(title).
 		Description(description).
 		Value(valuePtr)
 }
 
-// handleParameterSubmit processes the submitted parameter values
 func (m *model) handleParameterSubmit() tea.Cmd {
 	pt := m.palette.PendingTool
 	if pt == nil {
 		return m.showNotification("⚠️", "No pending tool found", "error")
 	}
 
-	// Parse and validate all parameter values
 	required := make(map[string]bool)
 	for _, r := range pt.Tool.InputSchema.Required {
 		required[r] = true
 	}
 
-	// Extract values from form and convert to proper types
 	for paramName, valuePtr := range pt.FormValues {
 		if valuePtr == nil {
 			continue
@@ -534,19 +475,16 @@ func (m *model) handleParameterSubmit() tea.Cmd {
 
 		value := strings.TrimSpace(*valuePtr)
 
-		// Skip empty optional parameters
 		if value == "" && !required[paramName] {
 			continue
 		}
 
-		// Get parameter schema
 		paramDef := pt.Tool.InputSchema.Properties[paramName]
 		paramMap, ok := paramDef.(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		// Convert value based on type
 		paramType := "string"
 		if t, ok := paramMap["type"].(string); ok {
 			paramType = t
@@ -554,12 +492,10 @@ func (m *model) handleParameterSubmit() tea.Cmd {
 
 		switch paramType {
 		case "boolean":
-			// Parse boolean
 			boolVal := value == "true" || value == "yes" || value == "1"
 			pt.Args[paramName] = boolVal
 
 		case "number":
-			// Parse float
 			var floatVal float64
 			if _, err := fmt.Sscanf(value, "%f", &floatVal); err == nil {
 				pt.Args[paramName] = floatVal
@@ -568,7 +504,6 @@ func (m *model) handleParameterSubmit() tea.Cmd {
 			}
 
 		case "integer":
-			// Parse int
 			var intVal int
 			if _, err := fmt.Sscanf(value, "%d", &intVal); err == nil {
 				pt.Args[paramName] = intVal
@@ -577,7 +512,6 @@ func (m *model) handleParameterSubmit() tea.Cmd {
 			}
 
 		case "array", "object":
-			// Parse JSON for complex types
 			if value != "" {
 				var jsonValue interface{}
 				if err := json.Unmarshal([]byte(value), &jsonValue); err == nil {
@@ -588,28 +522,24 @@ func (m *model) handleParameterSubmit() tea.Cmd {
 			}
 
 		default:
-			// String (default)
 			if value != "" {
 				pt.Args[paramName] = value
 			}
 		}
 	}
 
-	// Execute the tool directly without preview/confirmation
 	m.palette.InputForm = nil
 	serverURL := pt.ServerURL
 	toolName := pt.Tool.Name
 	args := pt.Args
 	m.palette.PendingTool = nil
 
-	// Transition to executing state
 	m.palette.State = PaletteStateExecuting
 	m.palette.LoadingText = "Executing tool..."
 
 	return executeMCPToolWithArgs(serverURL, toolName, args)
 }
 
-// filterPaletteItems filters items based on query using simple substring matching
 func filterPaletteItems(items []PaletteItem, query string) []PaletteItem {
 	if query == "" {
 		return items
@@ -619,7 +549,6 @@ func filterPaletteItems(items []PaletteItem, query string) []PaletteItem {
 	var filtered []PaletteItem
 
 	for _, item := range items {
-		// Match against title, subtitle, or category
 		if strings.Contains(strings.ToLower(item.Title), query) ||
 			strings.Contains(strings.ToLower(item.Subtitle), query) ||
 			strings.Contains(strings.ToLower(item.Category), query) {
@@ -630,7 +559,6 @@ func filterPaletteItems(items []PaletteItem, query string) []PaletteItem {
 	return filtered
 }
 
-// openPalette opens the command palette
 func (m *model) openPalette() {
 	m.palette.State = PaletteStateSearching
 	m.palette.Query = ""
@@ -639,7 +567,6 @@ func (m *model) openPalette() {
 	m.palette.Cursor = 0
 }
 
-// closePalette closes the command palette
 func (m *model) closePalette() {
 	m.palette.State = PaletteStateIdle
 	m.palette.Query = ""
@@ -652,7 +579,6 @@ func (m *model) closePalette() {
 	m.palette.ResultText = ""
 }
 
-// truncate truncates a string to max length with ellipsis
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -660,9 +586,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// renderPalette renders the command palette with modern split-view layout
 func (m model) renderPalette() string {
-	// Make palette much larger - 85% of screen width, 80% of height
 	paletteWidth := int(float64(m.width) * 0.85)
 	paletteHeight := int(float64(m.height) * 0.80)
 
@@ -673,18 +597,15 @@ func (m model) renderPalette() string {
 		paletteHeight = 30
 	}
 
-	accentColor := lipgloss.Color("99") // Purple accent
+	accentColor := lipgloss.Color("99")
 
 	var lines []string
 
-	// Handle different palette states
 	switch m.palette.State {
 	case PaletteStateCollectingParams:
-		// Show parameter/wizard input form
 		if m.palette.InputForm == nil {
 			return lipgloss.NewStyle().Render("Error: No form available")
 		}
-		// Header styles
 		textStyle := lipgloss.NewStyle().Foreground(subtle)
 		keyStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
@@ -693,7 +614,6 @@ func (m model) renderPalette() string {
 
 		var headerContent string
 
-		// Check if this is a wizard or MCP parameter collection
 		if m.palette.WizardState != nil {
 			ws := m.palette.WizardState
 			wizardTitle := ws.Type
@@ -710,8 +630,6 @@ func (m model) renderPalette() string {
 		} else if m.palette.PendingTool != nil {
 			pt := m.palette.PendingTool
 
-			// Parameter input mode
-			// Count required vs optional
 			required := make(map[string]bool)
 			for _, r := range pt.Tool.InputSchema.Required {
 				required[r] = true
@@ -720,7 +638,6 @@ func (m model) renderPalette() string {
 			totalCount := len(pt.Tool.InputSchema.Properties)
 			optCount := totalCount - reqCount
 
-			// Check if AI pre-filled the values
 			aiPrefilled := pt.AITask != ""
 			var paramInfo string
 			if aiPrefilled {
@@ -733,7 +650,6 @@ func (m model) renderPalette() string {
 				paramInfo += "  "
 			}
 
-			// Tool icon based on server name
 			icon := "⚡"
 			if strings.Contains(strings.ToLower(pt.ServerName), "datadog") {
 				icon = "📊"
@@ -755,7 +671,6 @@ func (m model) renderPalette() string {
 			Render(headerContent)
 		lines = append(lines, infoBar)
 
-		// Add tool description subtitle if available (for MCP tools)
 		if m.palette.PendingTool != nil && m.palette.State == PaletteStateCollectingParams {
 			pt := m.palette.PendingTool
 			if pt.Tool.Description != "" {
@@ -770,11 +685,9 @@ func (m model) renderPalette() string {
 
 		lines = append(lines, "")
 
-		// Render the huh form
 		formView := m.palette.InputForm.View()
 		lines = append(lines, formView)
 
-		// If there's terminal output, show it below the form
 		if m.term.active {
 			lines = append(lines, "")
 			lines = append(lines, m.renderTerminalPane())
@@ -790,20 +703,16 @@ func (m model) renderPalette() string {
 		return container.Render(content)
 
 	case PaletteStateShowingResult:
-		// Show execution result
 		return m.renderPaletteResult(paletteWidth, paletteHeight, accentColor)
 
 	default:
-		// Normal command list mode with split view (searching, AI input, executing)
 		return m.renderPaletteSplitView(paletteWidth, paletteHeight, accentColor)
 	}
 }
 
-// renderPaletteResult renders the result view after tool execution
 func (m model) renderPaletteResult(paletteWidth, paletteHeight int, accentColor lipgloss.Color) string {
 	var lines []string
 
-	// Header
 	headerStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("234")).
 		Foreground(accentColor).
@@ -814,7 +723,6 @@ func (m model) renderPaletteResult(paletteWidth, paletteHeight int, accentColor 
 	lines = append(lines, headerStyle.Render("✓ "+m.palette.ResultTitle))
 	lines = append(lines, "")
 
-	// Render result with glamour
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStylesFromJSONBytes([]byte(customStyleJSON)),
 		glamour.WithWordWrap(paletteWidth-8),
@@ -830,7 +738,6 @@ func (m model) renderPaletteResult(paletteWidth, paletteHeight int, accentColor 
 	lines = append(lines, renderedOutput)
 	lines = append(lines, "")
 
-	// Footer hint
 	hintStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("234")).
 		Foreground(subtle).
@@ -850,26 +757,20 @@ func (m model) renderPaletteResult(paletteWidth, paletteHeight int, accentColor 
 	return container.Render(content)
 }
 
-// renderPaletteSplitView renders the command palette with split view (list + preview)
 func (m model) renderPaletteSplitView(paletteWidth, paletteHeight int, accentColor lipgloss.Color) string {
-	// Split: 45% list, 55% preview
 	listWidth := int(float64(paletteWidth) * 0.45)
-	previewWidth := paletteWidth - listWidth - 4 // Account for borders and spacing
+	previewWidth := paletteWidth - listWidth - 4
 
-	// Render left side (list)
 	leftPanel := m.renderPaletteList(listWidth, paletteHeight, accentColor)
 
-	// Render right side (preview)
 	rightPanel := m.renderPalettePreview(previewWidth, paletteHeight, accentColor)
 
-	// Join panels horizontally
 	content := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		leftPanel,
 		rightPanel,
 	)
 
-	// Container with border
 	container := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(accentColor).
@@ -878,11 +779,9 @@ func (m model) renderPaletteSplitView(paletteWidth, paletteHeight int, accentCol
 	return container.Render(content)
 }
 
-// renderPaletteList renders the command list (left panel)
 func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) string {
 	var lines []string
 
-	// Header with count and keyboard hints
 	countStyle := lipgloss.NewStyle().Foreground(accentColor).Bold(true)
 	textStyle := lipgloss.NewStyle().Foreground(subtle)
 	keyStyle := lipgloss.NewStyle().
@@ -893,7 +792,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 	var infoContent string
 	switch m.palette.State {
 	case PaletteStateExecuting:
-		// Loading state header
 		toolName := "AI Agent"
 		if m.palette.PendingTool != nil {
 			toolName = m.palette.PendingTool.Tool.Name
@@ -902,7 +800,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 			textStyle.Render("  Executing...")
 
 	case PaletteStateAIInput:
-		// AI Agent mode header
 		toolName := "AI Agent"
 		if m.palette.PendingTool != nil {
 			toolName = m.palette.PendingTool.Tool.Name
@@ -913,7 +810,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 			keyStyle.Render("esc") + textStyle.Render(" cancel")
 
 	default:
-		// Normal mode header
 		infoContent = countStyle.Render(fmt.Sprintf(" %d", len(m.palette.Filtered))) +
 			textStyle.Render(" commands  ") +
 			keyStyle.Render("↑↓") + textStyle.Render(" select  ") +
@@ -928,18 +824,15 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 		Render(infoContent)
 	lines = append(lines, infoBar)
 
-	// Search input
 	var queryDisplay string
 	var searchLine string
 
 	switch m.palette.State {
 	case PaletteStateExecuting:
-		// Loading state - show what was submitted
 		queryDisplay = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(m.palette.Query)
 		searchLine = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true).Render("🤖 ") + queryDisplay
 
 	case PaletteStateAIInput:
-		// AI Agent input mode
 		if m.palette.Query == "" {
 			queryDisplay = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Italic(true).Render("🤖 Describe what you want the AI to do...")
 		} else {
@@ -949,7 +842,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 		searchLine = lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true).Render("🤖 ") + queryDisplay
 
 	default:
-		// Normal search mode
 		if m.palette.Query == "" {
 			queryDisplay = lipgloss.NewStyle().Foreground(subtle).Italic(true).Render("Type to filter...")
 		} else {
@@ -962,18 +854,15 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 	searchBar := lipgloss.NewStyle().Padding(1, 1, 0, 1).Render(searchLine)
 	lines = append(lines, searchBar)
 
-	// Divider
 	divider := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("238")).
 		Render(strings.Repeat("─", width-2))
 	lines = append(lines, divider)
 
-	// Command list with grouping (or AI tool info in AI mode)
-	maxVisibleItems := height - 8 // Leave room for header/search/divider
+	maxVisibleItems := height - 8
 
 	switch m.palette.State {
 	case PaletteStateExecuting:
-		// Show loading indicator
 		loadingStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("114")).
 			Bold(true).
@@ -982,7 +871,7 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 			Align(lipgloss.Center)
 
 		spinner := "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-		frame := spinner[0:1] // TODO: animate this
+		frame := spinner[0:1]
 		lines = append(lines, "")
 		lines = append(lines, loadingStyle.Render(frame+" "+m.palette.LoadingText))
 		lines = append(lines, "")
@@ -996,18 +885,15 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 		lines = append(lines, infoStyle.Render("Please wait..."))
 
 	case PaletteStateAIInput:
-		// Show AI agent instructions instead of command list
 		if m.palette.PendingTool != nil {
 			tool := m.palette.PendingTool.Tool
 
-			// Tool description
 			descStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("252")).
 				Padding(1, 1).
 				Width(width - 4)
 			lines = append(lines, descStyle.Render(tool.Description))
 
-			// Instructions
 			lines = append(lines, "")
 			instructStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("114")).
@@ -1023,7 +909,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 		}
 
 	default:
-		// Searching mode - show command list
 		if len(m.palette.Filtered) == 0 {
 			emptyStyle := lipgloss.NewStyle().
 				Foreground(subtle).
@@ -1034,7 +919,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 			lines = append(lines, emptyStyle.Render("No matching commands"))
 		} else {
 		items := m.palette.Filtered
-		// Group items by category
 		grouped := make(map[string][]PaletteItem)
 		var categories []string
 		for _, item := range items {
@@ -1048,12 +932,10 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 			grouped[cat] = append(grouped[cat], item)
 		}
 
-		// Render grouped items
 		currentIndex := 0
 		for _, category := range categories {
 			catItems := grouped[category]
 
-			// Category header
 			catIcon := "📦"
 			catName := strings.Title(category)
 			switch category {
@@ -1078,7 +960,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 				Render(fmt.Sprintf("%s %s", catIcon, catName))
 			lines = append(lines, catHeader)
 
-			// Render items in this category
 			for _, item := range catItems {
 				if len(lines) >= maxVisibleItems+3 {
 					break
@@ -1086,21 +967,18 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 
 				isSelected := currentIndex == m.palette.Cursor
 
-				// Item title (truncate if needed)
 				title := item.Title
 				maxTitleLen := width - 10
 				if len(title) > maxTitleLen {
 					title = title[:maxTitleLen-3] + "..."
 				}
 
-				// Item icon
 				icon := item.Icon
 				if icon == "" {
 					icon = "•"
 				}
 
 				if isSelected {
-					// Selected item
 					itemLine := lipgloss.NewStyle().
 						Foreground(lipgloss.Color("255")).
 						Background(lipgloss.Color("237")).
@@ -1112,7 +990,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 					indicator := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("▶")
 					lines = append(lines, " "+indicator+" "+itemLine)
 				} else {
-					// Normal item
 					itemLine := lipgloss.NewStyle().
 						Foreground(lipgloss.Color("252")).
 						Padding(0, 1).
@@ -1123,13 +1000,11 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 				currentIndex++
 			}
 
-			// Add spacing between categories
 			if category != categories[len(categories)-1] {
 				lines = append(lines, "")
 			}
 		}
 
-		// "More items" indicator
 		if len(items) > maxVisibleItems {
 			moreStyle := lipgloss.NewStyle().
 				Foreground(subtle).
@@ -1142,7 +1017,6 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	// Panel container
 	panel := lipgloss.NewStyle().
 		Width(width).
 		Height(height).
@@ -1152,29 +1026,24 @@ func (m model) renderPaletteList(width, height int, accentColor lipgloss.Color) 
 	return panel.Render(content)
 }
 
-// renderPalettePreview renders the preview panel (right side)
 func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Color) string {
 	var lines []string
 
-	// If executing, show progress info
 	if m.palette.State == PaletteStateExecuting && m.palette.PendingTool != nil {
 		tool := m.palette.PendingTool.Tool
 
-		// Title
 		titleStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("114")).
 			Bold(true).
 			Padding(1, 1, 0, 1)
 		lines = append(lines, titleStyle.Render(fmt.Sprintf("🤖 Executing %s", tool.Name)))
 
-		// Divider
 		divider := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("238")).
 			Padding(0, 1).
 			Render(strings.Repeat("─", width-2))
 		lines = append(lines, divider)
 
-		// Steps
 		stepStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
 			Padding(1, 1)
@@ -1192,7 +1061,6 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 		return panel.Render(content)
 	}
 
-	// If in AI input mode, show parameter details
 	if m.palette.State == PaletteStateAIInput && m.palette.PendingTool != nil {
 		tool := m.palette.PendingTool.Tool
 		lines = append(lines, m.renderMCPToolPreview(&tool, width)...)
@@ -1205,14 +1073,12 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 		return panel.Render(content)
 	}
 
-	// Get selected item
 	var selectedItem *PaletteItem
 	if len(m.palette.Filtered) > 0 && m.palette.Cursor < len(m.palette.Filtered) {
 		selectedItem = &m.palette.Filtered[m.palette.Cursor]
 	}
 
 	if selectedItem == nil {
-		// No selection
 		emptyStyle := lipgloss.NewStyle().
 			Foreground(subtle).
 			Italic(true).
@@ -1222,7 +1088,6 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 		return emptyStyle.Render("Select a command to see details")
 	}
 
-	// Header with icon and title
 	titleStyle := lipgloss.NewStyle().
 		Foreground(accentColor).
 		Bold(true).
@@ -1235,7 +1100,6 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 
 	lines = append(lines, titleStyle.Render(fmt.Sprintf("%s %s", icon, selectedItem.Title)))
 
-	// Category badge
 	if selectedItem.Category != "" {
 		badgeStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
@@ -1246,20 +1110,15 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 		lines = append(lines, badgeStyle.Render(strings.ToUpper(selectedItem.Category)))
 	}
 
-	// Divider
 	divider := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("238")).
 		Padding(0, 1).
 		Render(strings.Repeat("─", width-2))
 	lines = append(lines, divider)
 
-	// Render specific content based on item type
 	if selectedItem.MCPTool != nil {
-		// MCP Tool preview
 		lines = append(lines, m.renderMCPToolPreview(selectedItem.MCPTool, width)...)
 	} else {
-		// Regular action/command preview
-		// Description
 		if selectedItem.Subtitle != "" {
 			descStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("252")).
@@ -1268,7 +1127,6 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 			lines = append(lines, descStyle.Render(selectedItem.Subtitle))
 		}
 
-		// Shortcut if available
 		if selectedItem.Shortcut != "" {
 			shortcutStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("114")).
@@ -1279,7 +1137,6 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	// Panel container
 	panel := lipgloss.NewStyle().
 		Width(width).
 		Height(height).
@@ -1288,11 +1145,9 @@ func (m model) renderPalettePreview(width, height int, accentColor lipgloss.Colo
 	return panel.Render(content)
 }
 
-// renderMCPToolPreview renders detailed preview for an MCP tool
 func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 	var lines []string
 
-	// Description
 	if tool.Description != "" {
 		descStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
@@ -1301,7 +1156,6 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 		lines = append(lines, descStyle.Render(tool.Description))
 	}
 
-	// Parameters section
 	if len(tool.InputSchema.Properties) > 0 {
 		headerStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("114")).
@@ -1309,31 +1163,27 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 			Padding(1, 1, 0, 1)
 		lines = append(lines, headerStyle.Render("Parameters:"))
 
-		// Build required map
 		required := make(map[string]bool)
 		for _, r := range tool.InputSchema.Required {
 			required[r] = true
 		}
 
-		// Sort parameter names for stable rendering (required first, then alphabetical)
 		var paramNames []string
 		for paramName := range tool.InputSchema.Properties {
 			paramNames = append(paramNames, paramName)
 		}
 
-		// Sort: required params first (alphabetically), then optional params (alphabetically)
 		sort.Slice(paramNames, func(i, j int) bool {
 			reqI := required[paramNames[i]]
 			reqJ := required[paramNames[j]]
 			if reqI != reqJ {
-				return reqI // Required comes first
+				return reqI
 			}
-			return paramNames[i] < paramNames[j] // Alphabetical within each group
+			return paramNames[i] < paramNames[j]
 		})
 
-		// List parameters in sorted order
 		paramCount := 0
-		maxParams := 8 // Limit display
+		maxParams := 8
 		for _, paramName := range paramNames {
 			paramDef := tool.InputSchema.Properties[paramName]
 			if paramCount >= maxParams {
@@ -1350,19 +1200,16 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 				continue
 			}
 
-			// Parameter name with required indicator
 			paramLabel := paramName
 			if required[paramName] {
 				paramLabel = paramName + " *"
 			}
 
-			// Parameter type
 			paramType := "string"
 			if t, ok := paramMap["type"].(string); ok {
 				paramType = t
 			}
 
-			// Build parameter line
 			paramStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("213")).
 				Padding(0, 1)
@@ -1372,14 +1219,12 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 
 			lines = append(lines, paramStyle.Render(fmt.Sprintf("  • %s", paramLabel))+" "+typeStyle.Render(fmt.Sprintf("(%s)", paramType)))
 
-			// Parameter description (if available)
 			if desc, ok := paramMap["description"].(string); ok && desc != "" {
 				descStyle := lipgloss.NewStyle().
 					Foreground(lipgloss.Color("246")).
 					Padding(0, 1).
 					MarginLeft(4).
 					Width(width - 8)
-				// Truncate long descriptions
 				if len(desc) > 80 {
 					desc = desc[:77] + "..."
 				}
@@ -1389,7 +1234,6 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 			paramCount++
 		}
 
-		// Summary
 		reqCount := len(tool.InputSchema.Required)
 		totalCount := len(tool.InputSchema.Properties)
 		summaryStyle := lipgloss.NewStyle().
@@ -1402,7 +1246,6 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 		}
 		lines = append(lines, summaryStyle.Render(summary))
 
-		// AI agent hint
 		lines = append(lines, "")
 		aiHintStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("114")).
@@ -1419,33 +1262,26 @@ func (m model) renderMCPToolPreview(tool *mcp.Tool, width int) []string {
 	return lines
 }
 
-// executeMCPToolWithAIAgent executes an MCP tool using mods AI to determine parameters
-// aiProgressMsg is sent during AI agent execution to update progress
 type aiProgressMsg struct {
 	step string
 }
 
-// aiAgentResultMsg carries the result from AI agent execution
 type aiAgentResultMsg struct {
 	title  string
 	output string
 	err    error
 }
 
-// aiPrefilledParamsMsg carries AI-determined parameters for user review
 type aiPrefilledParamsMsg struct {
 	params map[string]interface{}
 }
 
 func (m *model) executeMCPToolWithAIAgent(pt *mcpPendingTool) tea.Cmd {
 	return func() tea.Msg {
-		// Small delay to ensure loading state renders
 		time.Sleep(100 * time.Millisecond)
 
-		// Check if OpenAI API key is configured
 		apiKey := m.config.AI.OpenAIAPIKey
 		if apiKey == "" {
-			// Fall back to environment variable
 			apiKey = os.Getenv("OPENAI_API_KEY")
 		}
 
@@ -1460,7 +1296,6 @@ func (m *model) executeMCPToolWithAIAgent(pt *mcpPendingTool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
-		// Build prompt for AI
 		prompt := fmt.Sprintf(`You are helping execute an MCP tool. Based on the user's request, determine the appropriate parameter values.
 
 Tool: %s
@@ -1479,7 +1314,6 @@ Make reasonable assumptions for any missing information.`,
 			pt.AITask,
 		)
 
-		// Call OpenAI API directly
 		client := openai.NewClient(apiKey)
 		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model: openai.GPT4oMini,
@@ -1513,10 +1347,8 @@ Make reasonable assumptions for any missing information.`,
 
 		result := strings.TrimSpace(resp.Choices[0].Message.Content)
 
-		// Parse JSON response
 		var params map[string]interface{}
 		if err := json.Unmarshal([]byte(result), &params); err != nil {
-			// Show the AI response as formatted markdown
 			return aiAgentResultMsg{
 				title:  "🤖 " + pt.Tool.Name,
 				output: "**The AI response couldn't be parsed as JSON:**\n\n" + result + "\n\n---\n\n*Try entering parameters manually by pressing Enter on the tool.*",
@@ -1524,15 +1356,12 @@ Make reasonable assumptions for any missing information.`,
 			}
 		}
 
-		// Return the AI-determined parameters for user review
-		// The user can edit and then submit the form
 		return aiPrefilledParamsMsg{
 			params: params,
 		}
 	}
 }
 
-// formatToolSchema formats the tool's parameter schema for the AI prompt
 func formatToolSchema(tool mcp.Tool) string {
 	var schema strings.Builder
 
@@ -1541,7 +1370,6 @@ func formatToolSchema(tool mcp.Tool) string {
 		required[r] = true
 	}
 
-	// Sort parameters
 	var paramNames []string
 	for paramName := range tool.InputSchema.Properties {
 		paramNames = append(paramNames, paramName)
@@ -1580,7 +1408,6 @@ func formatToolSchema(tool mcp.Tool) string {
 	return schema.String()
 }
 
-// formatJSON formats a map as pretty JSON
 func formatJSON(data map[string]interface{}) string {
 	bytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -1589,7 +1416,6 @@ func formatJSON(data map[string]interface{}) string {
 	return string(bytes)
 }
 
-// startBIAWizard starts the BIA Code Review wizard
 func (m *model) startBIAWizard() tea.Cmd {
 	m.palette.WizardState = &wizardState{
 		Type: "bia",
@@ -1599,7 +1425,6 @@ func (m *model) startBIAWizard() tea.Cmd {
 	return m.nextWizardStep()
 }
 
-// startDeployWizard starts the Deploy Agent wizard
 func (m *model) startDeployWizard() tea.Cmd {
 	m.palette.WizardState = &wizardState{
 		Type: "deploy",
@@ -1611,7 +1436,6 @@ func (m *model) startDeployWizard() tea.Cmd {
 	return m.nextWizardStep()
 }
 
-// nextWizardStep advances to the next step in the wizard
 func (m *model) nextWizardStep() tea.Cmd {
 	ws := m.palette.WizardState
 	if ws == nil {
@@ -1627,12 +1451,11 @@ func (m *model) nextWizardStep() tea.Cmd {
 	return nil
 }
 
-// nextBIAStep handles BIA wizard steps
 func (m *model) nextBIAStep() tea.Cmd {
 	ws := m.palette.WizardState
 
 	switch ws.Step {
-	case 0: // Ask for input method
+	case 0:
 		m.palette.InputValue = ""
 		input := huh.NewSelect[string]().
 			Title("How would you like to provide code?").
@@ -1651,7 +1474,7 @@ func (m *model) nextBIAStep() tea.Cmd {
 		m.palette.State = PaletteStateCollectingParams
 		return m.palette.InputForm.Init()
 
-	case 1: // Get code (paste or file path)
+	case 1:
 		inputMethod := ws.Data["method"].(string)
 		m.palette.InputValue = ""
 
@@ -1684,7 +1507,7 @@ func (m *model) nextBIAStep() tea.Cmd {
 		m.palette.State = PaletteStateCollectingParams
 		return m.palette.InputForm.Init()
 
-	case 2: // Execute BIA review
+	case 2:
 		m.palette.State = PaletteStateExecuting
 		m.palette.LoadingText = "Reviewing code with BIA..."
 		m.palette.InputForm = nil
@@ -1700,7 +1523,6 @@ func (m *model) nextBIAStep() tea.Cmd {
 			}
 		}
 
-		// Run BIA review async
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
@@ -1725,7 +1547,6 @@ func (m *model) nextBIAStep() tea.Cmd {
 	return nil
 }
 
-// nextDeployStep handles Deploy wizard steps
 func (m *model) nextDeployStep() tea.Cmd {
 	ws := m.palette.WizardState
 	if ws == nil {
@@ -1733,7 +1554,7 @@ func (m *model) nextDeployStep() tea.Cmd {
 	}
 
 	switch ws.Step {
-	case 0: // Load Azure AI accounts and select one
+	case 0:
 		var loadCmd tea.Cmd
 		if _, ok := ws.Data["accounts_loaded"]; !ok {
 			if _, loading := ws.Data["accounts_loading"]; !loading {
@@ -1793,12 +1614,11 @@ func (m *model) nextDeployStep() tea.Cmd {
 
 		m.palette.State = PaletteStateCollectingParams
 
-		// Store selectedIdx temporarily for the next step
 		ws.Data["selected_account_idx"] = &selectedIdx
 
 		return tea.Batch(m.palette.InputForm.Init(), loadCmd)
 
-	case 1: // Load deployments for selected account
+	case 1:
 		selectedIdx := *ws.Data["selected_account_idx"].(*int)
 		accounts := ws.Data["accounts"].([]AzureAIAccount)
 		selectedAccount := accounts[selectedIdx]
@@ -1870,7 +1690,7 @@ func (m *model) nextDeployStep() tea.Cmd {
 
 		return tea.Batch(m.palette.InputForm.Init(), loadCmd)
 
-	case 2: // Select deployment method
+	case 2:
 		selectedDepIdx := *ws.Data["selected_deployment_idx"].(*int)
 		deployments := ws.Data["deployments"].([]AzureAIDeployment)
 		ws.Data["selected_deployment"] = deployments[selectedDepIdx]
@@ -1895,7 +1715,7 @@ func (m *model) nextDeployStep() tea.Cmd {
 
 		return m.palette.InputForm.Init()
 
-	case 3: // Enter task prompt
+	case 3:
 		method := *ws.Data["deploy_method"].(*string)
 		ws.Data["method_final"] = method
 
@@ -1916,13 +1736,13 @@ func (m *model) nextDeployStep() tea.Cmd {
 		m.palette.State = PaletteStateCollectingParams
 		return m.palette.InputForm.Init()
 
-	case 4: // Execute deployment
+	case 4:
 		m.palette.State = PaletteStateExecuting
 		m.palette.LoadingText = "Deploying agent..."
 		m.palette.InputForm = nil
 
-		prompt := strings.TrimSpace(ws.Data["prompt"].(string))
-		if prompt == "" {
+		promptStr := strings.TrimSpace(ws.Data["prompt"].(string))
+		if promptStr == "" {
 			return func() tea.Msg {
 				return aiAgentResultMsg{
 					title:  "Deploy Agent",
@@ -1936,9 +1756,7 @@ func (m *model) nextDeployStep() tea.Cmd {
 		deployment := ws.Data["selected_deployment"].(AzureAIDeployment)
 		method := ws.Data["method_final"].(string)
 
-		// Execute deployment asynchronously
 		return func() tea.Msg {
-			// Determine agent type from model
 			agentType := AgentCustom
 			modelLower := strings.ToLower(deployment.Model)
 			if strings.Contains(modelLower, "gpt") || strings.Contains(modelLower, "openai") {
@@ -1947,7 +1765,6 @@ func (m *model) nextDeployStep() tea.Cmd {
 				agentType = AgentClaude
 			}
 
-			// Get API key
 			apiKey := getAzureAIKey(account.ResourceGroup, account.Name)
 			if apiKey == "" {
 				return aiAgentResultMsg{
@@ -1957,13 +1774,13 @@ func (m *model) nextDeployStep() tea.Cmd {
 				}
 			}
 
-			config := DeployConfig{
+			dconfig := DeployConfig{
 				AgentType:     agentType,
 				DeployMethod:  DeployMethod(method),
 				AgentName:     fmt.Sprintf("agent-%d", time.Now().Unix()),
 				ResourceGroup: account.ResourceGroup,
 				Location:      account.Location,
-				Prompt:        prompt,
+				Prompt:        promptStr,
 				AIAccount:     account.Name,
 				AIEndpoint:    account.Endpoint,
 				AIDeployment:  deployment.Name,
@@ -1975,9 +1792,9 @@ func (m *model) nextDeployStep() tea.Cmd {
 
 			switch DeployMethod(method) {
 			case DeployACI:
-				result, err = deployToACIFromPalette(config, apiKey)
+				result, err = deployToACIFromPalette(dconfig, apiKey)
 			case DeployPipeline:
-				result, err = deployToPipelineFromPalette(config, apiKey)
+				result, err = deployToPipelineFromPalette(dconfig, apiKey)
 			default:
 				err = fmt.Errorf("unknown deployment method: %s", method)
 			}
@@ -2001,17 +1818,14 @@ func (m *model) nextDeployStep() tea.Cmd {
 	return nil
 }
 
-// deployWizardAccountsMsg carries loaded Azure AI accounts
 type deployWizardAccountsMsg struct {
 	accounts []AzureAIAccount
 }
 
-// deployWizardDeploymentsMsg carries loaded model deployments
 type deployWizardDeploymentsMsg struct {
 	deployments []AzureAIDeployment
 }
 
-// deployWizardErrorMsg carries wizard errors without leaving the form flow
 type deployWizardErrorMsg struct {
 	step    int
 	message string
@@ -2059,7 +1873,6 @@ func (m *model) loadAzureAIDeploymentsCmd(account AzureAIAccount) tea.Cmd {
 	}
 }
 
-// handleWizardSubmit processes wizard form submission
 func (m *model) handleWizardSubmit() tea.Cmd {
 	ws := m.palette.WizardState
 	if ws == nil {
@@ -2069,15 +1882,13 @@ func (m *model) handleWizardSubmit() tea.Cmd {
 	value := m.palette.InputValue
 	advanceStep := true
 
-	// Store the value based on current step
 	switch ws.Type {
 	case "bia":
 		switch ws.Step {
-		case 0: // Input method selected
+		case 0:
 			ws.Data["method"] = value
-		case 1: // Code provided
+		case 1:
 			if ws.Data["method"] == "file" {
-				// Read file
 				content, err := os.ReadFile(value)
 				if err != nil {
 					return func() tea.Msg {
@@ -2104,12 +1915,11 @@ func (m *model) handleWizardSubmit() tea.Cmd {
 				advanceStep = false
 				return m.nextDeployStep()
 			}
-		case 3: // Task prompt entered
+		case 3:
 			ws.Data["prompt"] = value
 		}
 	}
 
-	// Move to next step
 	if advanceStep {
 		ws.Step++
 		return m.nextWizardStep()

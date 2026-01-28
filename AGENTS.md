@@ -33,7 +33,7 @@ Skitz is a terminal UI command reference system built with the **Charm** stack i
 - **Config**: `~/.config/skitz/config.yaml`
 - **History**: `~/.local/share/skitz/history.json`
 - **Agent History**: `~/.local/share/skitz/agent_history.json`
-- **Resources**: `~/dotfiles/resources/*.md`
+- **Resources**: `~/.config/skitz/resources/*.md`
 
 ## Essential Commands
 
@@ -112,7 +112,7 @@ Azure deployment wizard:
 
 ## Available Resources
 
-Auto-discovered from `~/dotfiles/resources/` and exposed in the dashboard:
+Auto-discovered from `~/.config/skitz/resources/` and exposed in the dashboard:
 
 - `azure` - Azure CLI commands
 - `claude` - Claude AI assistant

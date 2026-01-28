@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -21,6 +21,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	overlay "github.com/rmhubbert/bubbletea-overlay"
+
+	"github.com/htelsiz/skitz/internal/config"
+	mcppkg "github.com/htelsiz/skitz/internal/mcp"
+	"github.com/htelsiz/skitz/internal/resources"
 )
 
 type model struct {
@@ -49,10 +53,10 @@ type model struct {
 	spring      harmonica.Spring // Spring for smooth animation
 
 	// Config and Quick Actions
-	config        Config
+	config        config.Config
 	quickActions  []QuickAction
-	history       []HistoryEntry
-	agentHistory  []AgentInteraction
+	history       []config.HistoryEntry
+	agentHistory  []config.AgentInteraction
 	favorites     map[string]bool
 
 	// Notification/Toast
@@ -62,7 +66,7 @@ type model struct {
 	palette Palette
 
 	// MCP status
-	mcpStatus []MCPServerStatus
+	mcpStatus []mcppkg.ServerStatus
 
 	// Embedded terminal
 	term EmbeddedTerm
@@ -70,30 +74,30 @@ type model struct {
 
 // EmbeddedTerm holds the state for the embedded terminal pane
 type EmbeddedTerm struct {
-	active  bool           // Terminal pane is visible
-	focused bool           // F1 toggles this - when true, keys go to terminal
-	vt      *vterm.VTerm   // Terminal emulator
-	pty     *os.File       // PTY master
-	width   int            // Terminal width
-	height  int            // Terminal height
-	exitErr error          // Set when process exits
-	exited  bool           // Process has exited
+	active  bool
+	focused bool
+	vt      *vterm.VTerm
+	pty     *os.File
+	width   int
+	height  int
+	exitErr error
+	exited  bool
 	// Static output mode (for MCP tools, etc.)
-	staticOutput string    // Static text to display instead of vterm
-	staticTitle  string    // Title for static output pane
+	staticOutput string
+	staticTitle  string
 }
 
 type tickMsg time.Time
 
 type mcpStatusMsg struct {
-	Statuses []MCPServerStatus
+	Statuses []mcppkg.ServerStatus
 }
 
 type mcpRefreshTickMsg struct{}
 
 // Terminal messages
-type termOutputMsg struct{}             // Signals vterm has new content to render
-type termExitMsg struct{ err error }    // Process exited
+type termOutputMsg struct{}
+type termExitMsg struct{ err error }
 
 // staticOutputMsg displays static text in the terminal pane
 type staticOutputMsg struct {
@@ -103,7 +107,7 @@ type staticOutputMsg struct {
 
 // agentInteractionMsg is sent when an agent interaction completes
 type agentInteractionMsg struct {
-	interaction AgentInteraction
+	interaction config.AgentInteraction
 }
 
 func tickCmd() tea.Cmd {
@@ -113,18 +117,17 @@ func tickCmd() tea.Cmd {
 }
 
 func newModel(startResource string) model {
-	cfg := loadConfig()
-	history := loadHistory()
-	agentHistory := loadAgentHistory()
+	cfg := config.Load(mcppkg.GetDefaultMCPServerURL())
+	history := config.LoadHistory()
+	agentHistory := config.LoadAgentHistory()
 
-	// Build favorites map from config
 	favorites := make(map[string]bool)
 	for _, f := range cfg.Favorites {
 		favorites[f] = true
 	}
 
 	m := model{
-		spring:       harmonica.NewSpring(harmonica.FPS(60), 6.0, 0.7), // bouncy spring
+		spring:       harmonica.NewSpring(harmonica.FPS(60), 6.0, 0.7),
 		config:       cfg,
 		quickActions: buildQuickActions(cfg),
 		history:      history,
@@ -137,7 +140,7 @@ func newModel(startResource string) model {
 		for i, r := range m.resources {
 			if r.name == startResource {
 				m.resCursor = i
-				m.currentView = viewDetail // Open resource view if resource specified
+				m.currentView = viewDetail
 				break
 			}
 		}
@@ -147,63 +150,100 @@ func newModel(startResource string) model {
 }
 
 func (m *model) loadResources() {
-	files, _ := os.ReadDir(resourcesDir)
-	for _, f := range files {
-		name := f.Name()
-		if strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, "-detail.md") {
-			resName := strings.TrimSuffix(name, ".md")
-			content, _ := os.ReadFile(filepath.Join(resourcesDir, name))
+	seen := make(map[string]bool)
 
-			// Hardcoded descriptions for dashboard cards
-			descriptions := map[string]string{
-				"claude": "AI coding assistant CLI",
-				"docker": "Container management",
-				"git":    "Version control & GitHub CLI",
-				"mcp":    "Model Context Protocol",
-				"azure":  "Cloud resource management",
-				"cursor": "AI-powered code editor",
-			}
+	descriptions := map[string]string{
+		"claude": "AI coding assistant CLI",
+		"docker": "Container management",
+		"git":    "Version control & GitHub CLI",
+		"mcp":    "Model Context Protocol",
+		"azure":  "Cloud resource management",
+		"cursor": "AI-powered code editor",
+	}
 
-			res := resource{
-				name:        resName,
-				description: descriptions[resName],
-				content:     string(content),
-			}
+	// 1. Read user resources from ~/.config/skitz/resources/ (override embedded)
+	userDir := config.ResourcesDir
+	if files, err := os.ReadDir(userDir); err == nil {
+		for _, f := range files {
+			name := f.Name()
+			if strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, "-detail.md") {
+				resName := strings.TrimSuffix(name, ".md")
+				content, _ := os.ReadFile(filepath.Join(userDir, name))
 
-			// Add commands as first "section"
-			res.sections = append(res.sections, section{
-				title:   "Commands",
-				content: string(content),
-			})
+				res := resource{
+					name:        resName,
+					description: descriptions[resName],
+					content:     string(content),
+					embedded:    false,
+				}
+				res.sections = append(res.sections, section{
+					title:   "Commands",
+					content: string(content),
+				})
 
-			// Load detail sections
-			detailPath := filepath.Join(resourcesDir, resName+"-detail.md")
-			if file, err := os.Open(detailPath); err == nil {
-				var cur *section
-				var buf strings.Builder
-				scanner := bufio.NewScanner(file)
-				for scanner.Scan() {
-					line := scanner.Text()
-					if strings.HasPrefix(line, "## ") {
-						if cur != nil {
-							cur.content = buf.String()
-							res.sections = append(res.sections, *cur)
+				// Load detail sections
+				detailPath := filepath.Join(userDir, resName+"-detail.md")
+				if file, err := os.Open(detailPath); err == nil {
+					var cur *section
+					var buf strings.Builder
+					scanner := bufio.NewScanner(file)
+					for scanner.Scan() {
+						line := scanner.Text()
+						if strings.HasPrefix(line, "## ") {
+							if cur != nil {
+								cur.content = buf.String()
+								res.sections = append(res.sections, *cur)
+							}
+							cur = &section{title: strings.TrimPrefix(line, "## ")}
+							buf.Reset()
+							buf.WriteString(line + "\n")
+						} else if cur != nil {
+							buf.WriteString(line + "\n")
 						}
-						cur = &section{title: strings.TrimPrefix(line, "## ")}
-						buf.Reset()
-						buf.WriteString(line + "\n")
-					} else if cur != nil {
-						buf.WriteString(line + "\n")
 					}
+					if cur != nil {
+						cur.content = buf.String()
+						res.sections = append(res.sections, *cur)
+					}
+					file.Close()
 				}
-				if cur != nil {
-					cur.content = buf.String()
-					res.sections = append(res.sections, *cur)
-				}
-				file.Close()
-			}
 
-			m.resources = append(m.resources, res)
+				m.resources = append(m.resources, res)
+				seen[resName] = true
+			}
+		}
+	}
+
+	// 2. Read embedded defaults for any not already loaded from user dir
+	entries, err := resources.Default.ReadDir(".")
+	if err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, "-detail.md") {
+				resName := strings.TrimSuffix(name, ".md")
+				if seen[resName] {
+					continue // User override takes precedence
+				}
+
+				content, readErr := resources.Default.ReadFile(name)
+				if readErr != nil {
+					continue
+				}
+
+				res := resource{
+					name:        resName,
+					description: descriptions[resName],
+					content:     string(content),
+					embedded:    true,
+				}
+				res.sections = append(res.sections, section{
+					title:   "Commands",
+					content: string(content),
+				})
+
+				m.resources = append(m.resources, res)
+				seen[resName] = true
+			}
 		}
 	}
 }
@@ -224,7 +264,6 @@ func (m model) currentSection() *section {
 	return nil
 }
 
-// initViewComponents sets up the viewport and table for the resource view
 func (m *model) initViewComponents() {
 	res := m.currentResource()
 	if res == nil {
@@ -233,9 +272,8 @@ func (m *model) initViewComponents() {
 
 	meta := toolMetadata[res.name]
 
-	// Full-screen dimensions (accounting for tabs, info bar, status bar)
 	contentW := m.width - 4
-	contentH := m.height - 8 // tabs(3) + accent(1) + info(1) + status(1) + padding(2)
+	contentH := m.height - 8
 
 	if contentW < 60 {
 		contentW = 60
@@ -244,18 +282,14 @@ func (m *model) initViewComponents() {
 		contentH = 10
 	}
 
-	// Initialize viewport for fallback content
 	m.contentView = viewport.New(contentW, contentH)
 	m.contentView.Style = lipgloss.NewStyle()
 
-	// Initialize command table with styling
-	// Set wide initial column widths - these will be adjusted per-section in updateViewportContent()
 	columns := []table.Column{
-		{Title: "Command", Width: contentW - 50}, // Very wide initially
+		{Title: "Command", Width: contentW - 50},
 		{Title: "Description", Width: 45},
 	}
 
-	// Create table styles matching our theme
 	tableStyles := table.DefaultStyles()
 	tableStyles.Header = tableStyles.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -267,7 +301,6 @@ func (m *model) initViewComponents() {
 		Foreground(lipgloss.Color("255")).
 		Background(lipgloss.Color("237")).
 		Bold(true)
-	// Use empty Cell style to avoid any width constraints
 	tableStyles.Cell = lipgloss.NewStyle()
 
 	m.commandTable = table.New(
@@ -278,13 +311,10 @@ func (m *model) initViewComponents() {
 		table.WithStyles(tableStyles),
 	)
 
-	// Set initial content
 	m.updateViewportContent()
-
 	m.viewReady = true
 }
 
-// updateViewportContent renders the current section content into the viewport and table
 func (m *model) updateViewportContent() {
 	sec := m.currentSection()
 	if sec == nil {
@@ -296,13 +326,11 @@ func (m *model) updateViewportContent() {
 	res := m.currentResource()
 	meta := toolMetadata[res.name]
 
-	// Parse commands from content
 	m.commands = parseCommands(sec.content)
 	if m.cmdCursor >= len(m.commands) {
 		m.cmdCursor = 0
 	}
 
-	// Apply syntax highlighting and calculate required width
 	rows := make([]table.Row, len(m.commands))
 	maxHighlightedWidth := 0
 
@@ -310,7 +338,6 @@ func (m *model) updateViewportContent() {
 		highlightedCmd := highlightShellCommand(cmd.raw)
 		rows[i] = table.Row{highlightedCmd, cmd.description}
 
-		// Measure the highlighted string
 		highlightedWidth := runewidth.StringWidth(highlightedCmd)
 		if highlightedWidth > maxHighlightedWidth {
 			maxHighlightedWidth = highlightedWidth
@@ -320,13 +347,10 @@ func (m *model) updateViewportContent() {
 	m.commandTable.SetRows(rows)
 	m.commandTable.SetCursor(m.cmdCursor)
 
-	// Set column width to accommodate the widest highlighted command (including ANSI codes)
-	// Add small padding and ensure description has minimum space
 	availableWidth := m.contentView.Width
 	cmdColWidth := maxHighlightedWidth + 5
 	minDescWidth := 40
 
-	// Cap command width if needed to leave room for description
 	if cmdColWidth > availableWidth-minDescWidth {
 		cmdColWidth = availableWidth - minDescWidth
 	}
@@ -342,7 +366,6 @@ func (m *model) updateViewportContent() {
 	}
 	m.commandTable.SetColumns(columns)
 
-	// Process content for viewport fallback (strip ^run tags)
 	content := sec.content
 	lines := strings.Split(content, "\n")
 	var processedLines []string
@@ -353,10 +376,8 @@ func (m *model) updateViewportContent() {
 	}
 	content = strings.Join(processedLines, "\n")
 
-	// Update custom style to use tool's accent color for h2 headings
 	dynamicStyleJSON := strings.Replace(customStyleJSON, `"color": "114"`, fmt.Sprintf(`"color": "%s"`, string(meta.color)), 1)
 
-	// Create renderer with custom premium style
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStylesFromJSONBytes([]byte(dynamicStyleJSON)),
 		glamour.WithWordWrap(m.contentView.Width),
@@ -378,7 +399,6 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Forward non-key messages to huh form when collecting params
 	if m.palette.State == PaletteStateCollectingParams && m.palette.InputForm != nil {
 		if _, isKey := msg.(tea.KeyMsg); !isKey {
 			form, cmd := m.palette.InputForm.Update(msg)
@@ -407,23 +427,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case commandDoneMsg:
-		// Add to history if command was executed
 		if msg.command != "" && m.config.History.Enabled {
-			entry := HistoryEntry{
+			entry := config.HistoryEntry{
 				Command:   msg.command,
 				Tool:      msg.tool,
 				Timestamp: time.Now(),
 				Success:   msg.success,
 			}
-			m.history = addToHistory(m.history, entry, m.config.History.MaxItems)
+			m.history = config.AddToHistory(m.history, entry, m.config.History.MaxItems)
 			if m.config.History.Persist {
-				saveHistory(m.history)
+				config.SaveHistory(m.history)
 			}
 		}
 		return m, nil
 
 	case termStartMsg:
-		// Terminal started - store state and begin reading
 		m.term = EmbeddedTerm{
 			active:  true,
 			focused: true,
@@ -433,13 +451,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			height:  msg.height,
 		}
 
-		// Start goroutine to read PTY output
 		go func() {
 			reader := bufio.NewReader(msg.pty)
 			msg.vt.ProcessStdout(reader)
 		}()
 
-		// Return cmd that waits for process and sends exit message
 		waitCmd := func() tea.Msg {
 			err := msg.cmd.Wait()
 			return termExitMsg{err: err}
@@ -448,54 +464,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.waitForTermOutput(), waitCmd)
 
 	case termOutputMsg:
-		// Terminal has new output, continue reading
 		if m.term.active && !m.term.exited {
 			return m, m.waitForTermOutput()
 		}
 		return m, nil
 
 	case termExitMsg:
-		// Process exited
 		m.term.exited = true
 		m.term.exitErr = msg.err
 		m.term.focused = false
 		return m, nil
 
 	case agentInteractionMsg:
-		// Add agent interaction to history
-		m.agentHistory = addAgentInteraction(m.agentHistory, msg.interaction, 20)
-		saveAgentHistory(m.agentHistory)
+		m.agentHistory = config.AddAgentInteraction(m.agentHistory, msg.interaction, 20)
+		config.SaveAgentHistory(m.agentHistory)
 		return m, nil
 
 	case aiAgentResultMsg:
-		// AI agent execution completed - show result in palette
 		m.palette.State = PaletteStateShowingResult
 		m.palette.ResultTitle = msg.title
 		m.palette.ResultText = msg.output
 		return m, nil
 
 	case aiPrefilledParamsMsg:
-		// AI determined parameters - show form with pre-filled values for user review
 		if m.palette.PendingTool != nil {
-			// Store the AI-determined parameters
 			m.palette.PendingTool.Args = msg.params
-
-			// Build form with AI-prefilled values
 			return m, m.buildParameterFormWithValues(msg.params)
 		}
 		return m, nil
 
 	case staticOutputMsg:
-		// Display static output in terminal pane
 		m.term = EmbeddedTerm{
 			active:       true,
 			focused:      false,
 			staticOutput: msg.output,
 			staticTitle:  msg.title,
-			exited:       true, // Mark as "done" so ESC can close
+			exited:       true,
 		}
 
-		// If palette was in executing state, close it
 		if m.palette.State == PaletteStateExecuting {
 			m.closePalette()
 		}
@@ -503,25 +509,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case deployWizardAccountsMsg:
-		// Accounts loaded, update wizard state and advance
 		if m.palette.WizardState != nil {
 			m.palette.WizardState.Data["accounts"] = msg.accounts
 			m.palette.WizardState.Data["accounts_loaded"] = true
 			m.palette.WizardState.Data["accounts_loading"] = false
 			m.palette.WizardState.Data["accounts_error"] = ""
-			// Re-trigger the same step to show the selection form
 			return m, m.nextDeployStep()
 		}
 		return m, nil
 
 	case deployWizardDeploymentsMsg:
-		// Deployments loaded, update wizard state and advance
 		if m.palette.WizardState != nil {
 			m.palette.WizardState.Data["deployments"] = msg.deployments
 			m.palette.WizardState.Data["deployments_loaded"] = true
 			m.palette.WizardState.Data["deployments_loading"] = false
 			m.palette.WizardState.Data["deployments_error"] = ""
-			// Re-trigger the same step to show the selection form
 			return m, m.nextDeployStep()
 		}
 		return m, nil
@@ -544,7 +546,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Re-initialize view components if resource view is open and window resized
 		if m.currentView == viewDetail {
 			m.viewReady = false
 			m.initViewComponents()
@@ -561,28 +562,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		keyStr := msg.String()
 
-		// F1 toggles terminal focus
 		if keyStr == "f1" && m.term.active {
 			m.term.focused = !m.term.focused
 			return m, nil
 		}
 
-		// When terminal is focused, send keys to PTY
 		if m.term.active && m.term.focused && !m.term.exited {
 			return m, m.sendKeyToTerminal(msg)
 		}
 
-		// Escape closes terminal if not focused
 		if keyStr == "esc" && m.term.active && !m.term.focused {
 			m.closeTerminal()
 			return m, nil
 		}
 
-		// Command palette takes priority when open
 		if m.palette.State != PaletteStateIdle {
-			// Handle form input states (collecting params)
 			if m.palette.State == PaletteStateCollectingParams && m.palette.InputForm != nil {
-				// Handle escape to cancel input mode
 				if keyStr == "esc" {
 					m.palette.State = PaletteStateSearching
 					m.palette.InputForm = nil
@@ -591,14 +586,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
-				// Forward to huh form
 				form, cmd := m.palette.InputForm.Update(msg)
 				if f, ok := form.(*huh.Form); ok {
 					m.palette.InputForm = f
 
-					// Check if form is completed
 					if f.State == huh.StateCompleted {
-						// Handle wizard or parameter submission
 						if m.palette.WizardState != nil {
 							return m, m.handleWizardSubmit()
 						}
@@ -610,25 +602,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			switch keyStr {
 			case "esc", "ctrl+k":
-				// Handle based on current state
 				switch m.palette.State {
 				case PaletteStateExecuting:
-					// Can't close while executing
 					return m, nil
 				case PaletteStateAIInput:
-					// Return to searching mode
 					m.palette.State = PaletteStateSearching
 					m.palette.PendingTool = nil
 					m.palette.Query = ""
 					return m, nil
 				case PaletteStateShowingResult:
-					// Close palette when showing result
 					m.closePalette()
 					return m, nil
 				default:
-					// Close palette
 					m.closePalette()
-					// Clear any static output when closing palette
 					m.term.active = false
 					m.term.staticOutput = ""
 					m.term.staticTitle = ""
@@ -636,14 +622,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "enter":
-				// Handle based on current state
 				switch m.palette.State {
 				case PaletteStateExecuting:
-					// Can't do anything while executing
 					return m, nil
 
 				case PaletteStateAIInput:
-					// Execute tool with AI agent
 					task := strings.TrimSpace(m.palette.Query)
 					if task == "" {
 						return m, m.showNotification("⚠️", "Please describe what you want the AI to do", "warning")
@@ -652,7 +635,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					pt := m.palette.PendingTool
 					if pt != nil {
 						pt.AITask = task
-						// Transition to executing state
 						m.palette.State = PaletteStateExecuting
 						m.palette.LoadingText = "🤖 AI is determining parameters and executing..."
 						return m, m.executeMCPToolWithAIAgent(pt)
@@ -660,19 +642,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 
 				case PaletteStateSearching:
-					// Normal enter handling - select item
 					if len(m.palette.Filtered) > 0 && m.palette.Cursor < len(m.palette.Filtered) {
 						item := m.palette.Filtered[m.palette.Cursor]
-						// Clear previous output
 						m.term.staticOutput = ""
 						m.term.staticTitle = ""
 
-						// Check if this is an MCP tool that needs parameter input
 						if item.MCPTool != nil {
 							return m, m.startMCPToolInput(item)
 						}
 
-						// Otherwise use the handler
 						if item.Handler != nil {
 							cmd := item.Handler(&m)
 							return m, cmd
@@ -681,7 +659,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 
 				case PaletteStateShowingResult:
-					// Close palette when showing result
 					m.closePalette()
 					return m, nil
 
@@ -690,15 +667,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "ctrl+a":
-				// AI agent trigger - only works in searching mode
 				if m.palette.State != PaletteStateSearching {
 					return m, nil
 				}
 
-				// Check if selected item is an MCP tool
 				if len(m.palette.Filtered) > 0 && m.palette.Cursor < len(m.palette.Filtered) {
 					item := m.palette.Filtered[m.palette.Cursor]
-					// Only trigger AI agent for MCP tools
 					if item.MCPTool != nil {
 						return m, m.startMCPToolWithAI(item)
 					}
@@ -706,7 +680,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case "up", "ctrl+p":
-				// Only allow navigation in searching mode
 				if m.palette.State != PaletteStateSearching {
 					return m, nil
 				}
@@ -718,7 +691,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case "down", "ctrl+n":
-				// Only allow navigation in searching mode
 				if m.palette.State != PaletteStateSearching {
 					return m, nil
 				}
@@ -730,13 +702,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case "backspace":
-				// Only allow editing in searching or AI input mode
 				if m.palette.State != PaletteStateSearching && m.palette.State != PaletteStateAIInput {
 					return m, nil
 				}
 				if len(m.palette.Query) > 0 {
 					m.palette.Query = m.palette.Query[:len(m.palette.Query)-1]
-					// Only filter in searching mode
 					if m.palette.State == PaletteStateSearching {
 						m.palette.Filtered = filterPaletteItems(m.palette.Items, m.palette.Query)
 						m.palette.Cursor = 0
@@ -748,22 +718,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 
 			default:
-				// Only allow typing in searching or AI input mode
 				if m.palette.State != PaletteStateSearching && m.palette.State != PaletteStateAIInput {
 					return m, nil
 				}
 
-				// Handle regular character input
 				if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
 					m.palette.Query += keyStr
-					// Only filter in searching mode
 					if m.palette.State == PaletteStateSearching {
 						m.palette.Filtered = filterPaletteItems(m.palette.Items, m.palette.Query)
 						m.palette.Cursor = 0
 					}
 				} else if keyStr == "space" {
 					m.palette.Query += " "
-					// Only filter in searching mode
 					if m.palette.State == PaletteStateSearching {
 						m.palette.Filtered = filterPaletteItems(m.palette.Items, m.palette.Query)
 						m.palette.Cursor = 0
@@ -773,13 +739,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Open command palette with ctrl+k (works globally)
 		if keyStr == "ctrl+k" {
 			m.openPalette()
 			return m, nil
 		}
 
-		// Handle resource view-specific keys
 		if m.currentView == viewDetail && m.viewReady {
 			switch msg.String() {
 			case "q":
@@ -797,9 +761,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.secCursor = 0
 				return m, nil
 
-			// Section navigation (up/down navigate sections in the list)
 			case "tab", "shift+tab":
-				// Tab cycles through sections
 				res := m.currentResource()
 				if res != nil {
 					if msg.String() == "tab" {
@@ -820,7 +782,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			// Arrow keys: left/right for sections, up/down for content
 			case "left", "h":
 				if m.secCursor > 0 {
 					m.secCursor--
@@ -838,7 +799,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			// Command navigation - forward to table
 			case "up", "k", "down", "j":
 				if len(m.commands) > 0 {
 					var cmd tea.Cmd
@@ -848,7 +808,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			// Execute selected command
 			case "enter":
 				if len(m.commands) > 0 && m.cmdCursor < len(m.commands) {
 					cmd := m.commands[m.cmdCursor]
@@ -883,7 +842,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			// Page scrolling
 			case "ctrl+d", "pgdown":
 				m.contentView.HalfViewDown()
 				return m, nil
@@ -900,7 +858,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.contentView.GotoBottom()
 				return m, nil
 
-			// Number keys jump to sections
 			case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 				idx := int(msg.String()[0] - '1')
 				res := m.currentResource()
@@ -912,14 +869,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Forward other keys to viewport for scrolling
 			var cmd tea.Cmd
 			m.contentView, cmd = m.contentView.Update(msg)
 			cmds = append(cmds, cmd)
 			return m, tea.Batch(cmds...)
 		}
 
-		// Dashboard navigation (when resource view is closed)
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -940,7 +895,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.resCursor++
 			}
 
-		// Jump to resource and open resource view
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			idx := int(msg.String()[0] - '1')
 			if idx < len(m.resources) {
@@ -955,16 +909,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func fetchMCPStatusCmd(cfg MCPConfig) tea.Cmd {
+func fetchMCPStatusCmd(cfg config.MCPConfig) tea.Cmd {
 	return func() tea.Msg {
 		if !cfg.Enabled || len(cfg.Servers) == 0 {
 			return mcpStatusMsg{Statuses: nil}
 		}
 
-		statuses := make([]MCPServerStatus, 0, len(cfg.Servers))
+		statuses := make([]mcppkg.ServerStatus, 0, len(cfg.Servers))
 		for _, server := range cfg.Servers {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			status := FetchMCPServerStatus(ctx, server.Name, server.URL)
+			status := mcppkg.FetchServerStatus(ctx, server.Name, server.URL)
 			cancel()
 			statuses = append(statuses, status)
 		}
@@ -983,7 +937,6 @@ func scheduleMCPRefreshCmd(seconds int) tea.Cmd {
 	})
 }
 
-// sendKeyToTerminal converts a tea.KeyMsg to bytes and writes to PTY
 func (m *model) sendKeyToTerminal(msg tea.KeyMsg) tea.Cmd {
 	if m.term.pty == nil {
 		return nil
@@ -1030,7 +983,6 @@ func (m *model) sendKeyToTerminal(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeySpace:
 		b = []byte{' '}
 	default:
-		// For other keys, try to use the string representation
 		s := msg.String()
 		if len(s) == 1 {
 			b = []byte(s)
@@ -1043,7 +995,6 @@ func (m *model) sendKeyToTerminal(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// closeTerminal cleans up the embedded terminal
 func (m *model) closeTerminal() {
 	if m.term.pty != nil {
 		m.term.pty.Close()
@@ -1054,13 +1005,11 @@ func (m *model) closeTerminal() {
 	m.term = EmbeddedTerm{}
 }
 
-// termRenderer implements ecma48.Renderer for vterm
 type termRenderer struct{}
 
 func (r *termRenderer) HandleCh(ch ecma48.PositionedChar) {}
 func (r *termRenderer) SetCursor(x, y int)                {}
 
-// waitForTermOutput returns a Cmd that polls for terminal updates
 func (m *model) waitForTermOutput() tea.Cmd {
 	return tea.Tick(time.Millisecond*16, func(t time.Time) tea.Msg {
 		return termOutputMsg{}
@@ -1074,7 +1023,6 @@ func (m model) View() string {
 
 	var content string
 
-	// Render the appropriate view based on currentView
 	switch m.currentView {
 	case viewDashboard:
 		content = m.renderDashboard()
@@ -1087,16 +1035,13 @@ func (m model) View() string {
 	status := m.renderStatusBar()
 	background := lipgloss.JoinVertical(lipgloss.Left, content, status)
 
-	// If command palette is open, overlay it centered on screen
 	if m.palette.State != PaletteStateIdle {
 		palette := m.renderPalette()
 		background = overlay.Composite(palette, background, overlay.Center, overlay.Center, 0, 0)
 	}
 
-	// Overlay notification toast at top-right if present (works in both views)
 	if m.notification != nil {
 		toast := m.renderNotification()
-		// Position toast at top-right with some padding
 		toastW := lipgloss.Width(toast)
 		offsetX := m.width - toastW - 4
 		if offsetX < 0 {
@@ -1106,4 +1051,10 @@ func (m model) View() string {
 	}
 
 	return background
+}
+
+// Run is the public entry point for the TUI application.
+func Run(startResource string) error {
+	_, err := tea.NewProgram(newModel(startResource), tea.WithAltScreen()).Run()
+	return err
 }

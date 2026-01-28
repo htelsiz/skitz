@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -53,7 +53,6 @@ func (m model) renderDashboard() string {
 	}
 	revealedQuote := quoteText[:visibleChars]
 
-	// Build the padded quote to maintain box width
 	var paddedQuote string
 	if visibleChars < len(quoteText) {
 		spacesNeeded := len(quoteText) - visibleChars - 1
@@ -73,28 +72,22 @@ func (m model) renderDashboard() string {
 		headerW = 60
 	}
 
-	// Build the title block with version and description inline
 	titleBlock := lipgloss.JoinVertical(lipgloss.Left,
 		titleArt,
 		versionStyle.Render("v0.1")+" "+descStyle.Render("Command Center"),
 	)
 
-	// Combine BIA logo and title side by side (BIA logo includes crane imagery)
 	headerTop := lipgloss.JoinHorizontal(lipgloss.Center, biaLogo, "    ", titleBlock)
 
-	// Quote box
 	quoteBox := quoteStyle.Render(fmt.Sprintf(`╭──────────────────────────────────╮
 │  %s  │
 ╰──────────────────────────────────╯`, paddedQuote))
 
-	// Decorative border styles
 	borderStyle := lipgloss.NewStyle().Foreground(dimBorder)
 
-	// Simple borders without tagline
 	topBorder := borderStyle.Render("╔" + strings.Repeat("═", headerW-2) + "╗")
 	bottomBorder := borderStyle.Render("╚" + strings.Repeat("═", headerW-2) + "╝")
 
-	// Combine header content (centered)
 	headerInner := lipgloss.JoinVertical(lipgloss.Center,
 		"",
 		headerTop,
@@ -110,12 +103,9 @@ func (m model) renderDashboard() string {
 		bottomBorder,
 	)
 
-	// Layout: 30% actions panel (left), 70% main content (right)
 	actionsW := (m.width * 25) / 100
-	mainAreaW := m.width - actionsW - 3 // -3 for spacing
+	mainAreaW := m.width - actionsW - 3
 
-	// Actions panel (full height on left)
-	// Consistent indentation: 2 spaces for items, 4 for sub-items, 6 for sub-sub-items
 	actionsTitleStyle := lipgloss.NewStyle().
 		Foreground(secondary).
 		Bold(true)
@@ -131,10 +121,8 @@ func (m model) renderDashboard() string {
 		maxLineLen = 10
 	}
 
-	// Sidebar content
 	var sidebarLines []string
 
-	// Command palette hint (prominent)
 	paletteHintStyle := lipgloss.NewStyle().
 		Background(primary).
 		Foreground(lipgloss.Color("255")).
@@ -150,7 +138,6 @@ func (m model) renderDashboard() string {
 		paletteDescStyle.Render("  ctrl+k to open"),
 	)
 
-	// Favorites section
 	if len(m.config.Favorites) > 0 {
 		sidebarLines = append(sidebarLines, "", actionsTitleStyle.Render("⭐ Favorites"))
 		for i, fav := range m.config.Favorites {
@@ -166,7 +153,6 @@ func (m model) renderDashboard() string {
 		}
 	}
 
-	// Agent interactions section
 	sidebarLines = append(sidebarLines, "", actionsTitleStyle.Render("🤖 Agent History"))
 
 	agentDisplayCount := 3
@@ -196,7 +182,6 @@ func (m model) renderDashboard() string {
 		}
 	}
 
-	// MCP connections section
 	if m.config.MCP.Enabled {
 		sidebarLines = append(sidebarLines, "", actionsTitleStyle.Render("🧩 MCP Connections"))
 		if len(m.mcpStatus) == 0 {
@@ -263,7 +248,6 @@ func (m model) renderDashboard() string {
 		}
 	}
 
-	// Recent history section
 	sidebarLines = append(sidebarLines, "", actionsTitleStyle.Render("⏱ Recent"))
 
 	displayCount := m.config.History.DisplayCount
@@ -296,17 +280,14 @@ func (m model) renderDashboard() string {
 		Padding(1, 2).
 		Render(actionsContent)
 
-	// Adjust header width to fit main area
 	headerW = mainAreaW - 2
 	if headerW < 60 {
 		headerW = 60
 	}
 
-	// Recalculate borders for new width
 	topBorder = borderStyle.Render("╔" + strings.Repeat("═", headerW-2) + "╗")
 	bottomBorder = borderStyle.Render("╚" + strings.Repeat("═", headerW-2) + "╝")
 
-	// Rebuild header content with correct width and centering
 	headerInner = lipgloss.JoinVertical(lipgloss.Center,
 		"",
 		headerTop,
@@ -322,7 +303,6 @@ func (m model) renderDashboard() string {
 		bottomBorder,
 	)
 
-	// Calculate card width (fit 2-3 cards per row in the main area)
 	cardW := (mainAreaW - 6) / 3
 	if cardW < 25 {
 		cardW = (mainAreaW - 4) / 2
@@ -331,40 +311,33 @@ func (m model) renderDashboard() string {
 		cardW = mainAreaW - 4
 	}
 
-	// Render enhanced resource cards
 	var cards []string
 	for i, res := range m.resources {
 		meta := toolMetadata[res.name]
 		isSelected := i == m.resCursor
 
-		// Keyboard shortcut
 		shortcut := lipgloss.NewStyle().
 			Foreground(subtle).
 			Render(fmt.Sprintf("[%d]", i+1))
 
-		// Tool name (bold, colored like category)
 		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(meta.color)
 		if meta.status == "coming_soon" {
 			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(subtle)
 		}
-		// Uppercase for more prominence
 		toolName := nameStyle.Render(strings.ToUpper(res.name))
 
-		// Description
 		descCardStyle := lipgloss.NewStyle().Foreground(subtle)
 		if meta.status == "coming_soon" {
 			descCardStyle = descCardStyle.Italic(true)
 		}
 		description := descCardStyle.Render(res.description)
 
-		// Category tag
 		categoryStyle := lipgloss.NewStyle().
 			Foreground(meta.color).
 			Background(lipgloss.Color("236")).
 			Padding(0, 1)
 		categoryTag := categoryStyle.Render(meta.category)
 
-		// Build card content
 		cardContent := lipgloss.JoinVertical(lipgloss.Left,
 			toolName+"  "+shortcut,
 			description,
@@ -372,22 +345,18 @@ func (m model) renderDashboard() string {
 			categoryTag,
 		)
 
-		// Card border style based on state
 		var cardBorderStyle lipgloss.Style
 		if meta.status == "coming_soon" {
-			// Dimmed dashed-look border for coming soon
 			cardBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("238")).
 				Padding(1, 1)
 		} else if isSelected {
-			// Glowing border for selected
 			cardBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(meta.color).
 				Padding(1, 1)
 		} else {
-			// Subtle border with accent for default
 			cardBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(dimBorder).
@@ -398,7 +367,6 @@ func (m model) renderDashboard() string {
 		cards = append(cards, card)
 	}
 
-	// Arrange cards in rows
 	cardsPerRow := mainAreaW / cardW
 	if cardsPerRow < 1 {
 		cardsPerRow = 1
@@ -416,13 +384,10 @@ func (m model) renderDashboard() string {
 
 	cardGrid := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
-	// Right side: header + cards
 	rightContent := lipgloss.JoinVertical(lipgloss.Left, header, cardGrid)
 
-	// Combine: actions panel (left) + main content (right)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, actionsPanel, " ", rightContent)
 
-	// Pad to fill height
 	bodyH := lipgloss.Height(body)
 	if bodyH < contentH {
 		body = body + strings.Repeat("\n", contentH-bodyH)
@@ -443,8 +408,6 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 
 	var lines []string
 
-	// Calculate command and description widths from available space
-	// Leave room for: indicator(3) + num(4) + spacing(4)
 	availableW := width - 11
 	cmdW := (availableW * 50) / 100
 	descW := availableW - cmdW
@@ -459,26 +422,19 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 	for i, cmd := range m.commands {
 		isSelected := i == m.cmdCursor
 
-		// Prepare command text (truncate if needed)
 		cmdText := cmd.raw
 		if len(cmdText) > cmdW-2 {
 			cmdText = cmdText[:cmdW-5] + "..."
 		}
 
-		// Prepare description text (truncate if needed)
 		descText := cmd.description
 		if len(descText) > descW-2 {
 			descText = descText[:descW-5] + "..."
 		}
 
-		// Pad command to fixed width (plain string, no ANSI)
 		cmdPadded := cmdText + strings.Repeat(" ", max(0, cmdW-len(cmdText)))
 
 		if isSelected {
-			// ═══════════════════════════════════════════════════════════
-			// SELECTED ROW - Left border accent + background highlight
-			// ═══════════════════════════════════════════════════════════
-
 			indicator := lipgloss.NewStyle().
 				Foreground(accentColor).
 				Bold(true).
@@ -499,10 +455,8 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 				Foreground(lipgloss.Color("252")).
 				Render(descText)
 
-			// Build row without width constraint
 			row := indicator + num + cmdStyled + " " + desc
 
-			// Add left border for selection indicator
 			line := lipgloss.NewStyle().
 				Foreground(accentColor).
 				Render("┃") + " " +
@@ -513,10 +467,6 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 			lines = append(lines, line)
 
 		} else {
-			// ═══════════════════════════════════════════════════════════
-			// NORMAL ROW - Clean, minimal style
-			// ═══════════════════════════════════════════════════════════
-
 			num := lipgloss.NewStyle().
 				Foreground(subtle).
 				Render(fmt.Sprintf("%-3d", i+1))
@@ -530,7 +480,6 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 				Foreground(subtle).
 				Render(descText)
 
-			// Build row with spacing to align with selected rows
 			row := "  " + num + cmdStyled + " " + desc
 
 			lines = append(lines, row)
@@ -549,24 +498,16 @@ func (m model) renderResourceView() string {
 
 	meta := toolMetadata[res.name]
 
-	// Full-screen width
 	viewW := m.width
 
-	// ═══════════════════════════════════════════════════════════════
-	// TABS - Premium tab bar with proper tab styling
-	// ═══════════════════════════════════════════════════════════════
-
-	// Build tab row with visual tab shapes
 	var tabRow1, tabRow2, tabRow3 []string
 
 	for i, s := range res.sections {
-		// Truncate long titles
 		title := s.title
 		if len(title) > 14 {
 			title = title[:12] + ".."
 		}
 
-		// Format label with number - consistent padding
 		var label string
 		if i < 9 {
 			label = fmt.Sprintf("  %d  %s  ", i+1, title)
@@ -576,9 +517,6 @@ func (m model) renderResourceView() string {
 		labelW := len(label)
 
 		if i == m.secCursor {
-			// ══════════════════════════════════════════════
-			// ACTIVE TAB - Prominent with accent color, filled style
-			// ══════════════════════════════════════════════
 			topBorder := lipgloss.NewStyle().
 				Foreground(meta.color).
 				Render("┏" + strings.Repeat("━", labelW) + "┓")
@@ -595,7 +533,6 @@ func (m model) renderResourceView() string {
 					Foreground(meta.color).
 					Render("┃")
 
-			// Bottom open to connect with content
 			bottomBorder := lipgloss.NewStyle().
 				Foreground(meta.color).
 				Render("┗" + strings.Repeat("━", labelW) + "┛")
@@ -604,9 +541,6 @@ func (m model) renderResourceView() string {
 			tabRow2 = append(tabRow2, content)
 			tabRow3 = append(tabRow3, bottomBorder)
 		} else {
-			// ══════════════════════════════════════════════
-			// INACTIVE TAB - Outline only, no fill
-			// ══════════════════════════════════════════════
 			topBorder := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("240")).
 				Render("┌" + strings.Repeat("─", labelW) + "┐")
@@ -630,7 +564,6 @@ func (m model) renderResourceView() string {
 			tabRow3 = append(tabRow3, bottomBorder)
 		}
 
-		// Add spacing between tabs
 		if i < len(res.sections)-1 {
 			tabRow1 = append(tabRow1, "   ")
 			tabRow2 = append(tabRow2, "   ")
@@ -638,7 +571,6 @@ func (m model) renderResourceView() string {
 		}
 	}
 
-	// Combine the three rows
 	row1 := strings.Join(tabRow1, "")
 	row2 := strings.Join(tabRow2, "")
 	row3 := strings.Join(tabRow3, "")
@@ -649,14 +581,10 @@ func (m model) renderResourceView() string {
 		lipgloss.NewStyle().PaddingLeft(1).Render(row3),
 	)
 
-	// Accent line under tabs (uses tool color)
 	accentLine := lipgloss.NewStyle().
 		Foreground(meta.color).
 		Render(strings.Repeat("─", viewW))
 
-	// ═══════════════════════════════════════════════════════════════
-	// INFO BAR - Command count and instructions
-	// ═══════════════════════════════════════════════════════════════
 	cmdCount := len(m.commands)
 	var infoBar string
 
@@ -692,27 +620,17 @@ func (m model) renderResourceView() string {
 			Render("No runnable commands in this section")
 	}
 
-	// ═══════════════════════════════════════════════════════════════
-	// CONTENT - Always use viewport (glamour handles commands better)
-	// ═══════════════════════════════════════════════════════════════
 	var contentArea string
 
 	if m.viewReady {
-		// Use viewport for all content (including commands)
 		contentArea = m.contentView.View()
 	} else {
 		contentArea = "Loading..."
 	}
 
-	// ═══════════════════════════════════════════════════════════════
-	// COMBINE - Vertical layout
-	// ═══════════════════════════════════════════════════════════════
-
-	// If terminal is active, show it below the content
 	var view string
 	if m.term.active {
 		termPane := m.renderTerminalPane()
-		// Reduce content area height to make room for terminal
 		view = lipgloss.JoinVertical(lipgloss.Left,
 			tabBar,
 			accentLine,
@@ -728,7 +646,6 @@ func (m model) renderResourceView() string {
 		)
 	}
 
-	// Pad to fill height (minus 1 for status bar)
 	viewH := lipgloss.Height(view)
 	targetH := m.height - 1
 	if viewH < targetH {
@@ -744,10 +661,8 @@ func (m model) renderDetailView() string {
 	rightW := m.width - leftW - 3
 	contentH := m.height - 2
 
-	// Left pane - resources
 	leftPane := paneStyle.Width(leftW).Height(contentH).Render(m.renderResources(contentH - 2))
 
-	// Right pane - section tabs + content
 	rightContent := m.renderRightPane(rightW-2, contentH-2)
 	rightPane := focusedPaneStyle.Width(rightW).Height(contentH).Render(rightContent)
 
@@ -784,10 +699,8 @@ func (m model) renderRightPane(w, h int) string {
 		return dimItem.Render("No resource selected")
 	}
 
-	// Render section tabs
 	tabs := m.renderSectionTabs(w)
 
-	// Render content
 	content := m.renderContent(w, h-3)
 
 	return lipgloss.JoinVertical(lipgloss.Left, tabs, content)
@@ -808,20 +721,18 @@ func (m model) renderSectionTabs(maxW int) string {
 			style = activeTabStyle
 		}
 
-		// Truncate long titles
 		title := sec.title
 		if len(title) > 12 {
 			title = title[:10] + ".."
 		}
 
-		// Add number hint for first 9
 		label := title
 		if i < 9 {
 			label = fmt.Sprintf("%d %s", i+1, title)
 		}
 
 		tab := style.Render(label)
-		tabW := lipgloss.Width(tab) + 2 // spacing
+		tabW := lipgloss.Width(tab) + 2
 
 		if totalW+tabW > maxW-2 {
 			tabs = append(tabs, dimItem.Render("..."))
@@ -841,7 +752,6 @@ func (m model) renderContent(w, h int) string {
 		return dimItem.Render("No content")
 	}
 
-	// Create renderer with custom premium style
 	r, _ := glamour.NewTermRenderer(
 		glamour.WithStylesFromJSONBytes([]byte(customStyleJSON)),
 		glamour.WithWordWrap(w),
@@ -849,7 +759,6 @@ func (m model) renderContent(w, h int) string {
 	rendered, _ := r.Render(sec.content)
 	lines := strings.Split(rendered, "\n")
 
-	// Bounds check
 	scroll := m.scroll
 	if scroll >= len(lines) {
 		scroll = max(0, len(lines)-1)
@@ -864,7 +773,6 @@ func (m model) renderContent(w, h int) string {
 }
 
 func (m model) renderStatusBar() string {
-	// Styles for the new footer
 	bgStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	keyStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
@@ -891,11 +799,9 @@ func (m model) renderStatusBar() string {
 	var leftContent, rightContent string
 
 	if m.currentView == viewDashboard {
-		// Left: brand
 		leftContent = brandStyleSB.Render("SKITZ") + bgStyle.Render("  ") +
 			contextStyle.Render("Dashboard")
 
-		// Right: keybindings
 		rightContent = keyStyle.Render("ctrl+k") + descStyle.Render(" palette") + sep +
 			keyStyle.Render("↑↓") + descStyle.Render(" nav") + sep +
 			keyStyle.Render("1-9") + descStyle.Render(" jump") + sep +
@@ -926,7 +832,6 @@ func (m model) renderStatusBar() string {
 			keyStyle.Render("esc") + descStyle.Render(" back")
 	}
 
-	// Calculate padding to fill width
 	leftW := lipgloss.Width(leftContent)
 	rightW := lipgloss.Width(rightContent)
 	padW := m.width - leftW - rightW - 2
@@ -967,4 +872,3 @@ func formatTimeAgo(t time.Time) string {
 		return t.Format("Jan 2")
 	}
 }
-
