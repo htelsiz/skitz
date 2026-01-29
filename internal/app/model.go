@@ -12,14 +12,12 @@ import (
 
 	"github.com/aaronjanse/3mux/ecma48"
 	"github.com/aaronjanse/3mux/vterm"
-	"github.com/charmbracelet/bubbles/table"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/harmonica"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 	overlay "github.com/rmhubbert/bubbletea-overlay"
 
 	"github.com/htelsiz/skitz/internal/config"
@@ -31,20 +29,21 @@ type model struct {
 	resources     []resource
 	resCursor     int
 	secCursor     int
-	scroll        int
 	width, height int
 
 	// View state
 	currentView int // viewDashboard or viewDetail
 
 	// View components (bubbles)
-	contentView  viewport.Model
-	commandTable table.Model
-	viewReady    bool
+	contentView viewport.Model
+	viewReady   bool
 
 	// Command execution state
 	commands  []command // Parsed commands from current section
 	cmdCursor int       // Currently selected command (0-based)
+
+	// Cached rendered markdown for non-command content (avoids re-rendering on cursor change)
+	cachedMarkdownContext string
 
 	// Animation state
 	quotePos    float64          // Current character position (animated)
@@ -52,12 +51,11 @@ type model struct {
 	quoteTarget float64          // Target position (full quote length)
 	spring      harmonica.Spring // Spring for smooth animation
 
-	// Config and Quick Actions
-	config        config.Config
-	quickActions  []QuickAction
-	history       []config.HistoryEntry
-	agentHistory  []config.AgentInteraction
-	favorites     map[string]bool
+	// Config
+	config       config.Config
+	history      []config.HistoryEntry
+	agentHistory []config.AgentInteraction
+	favorites    map[string]bool
 
 	// Notification/Toast
 	notification *Notification
@@ -129,7 +127,6 @@ func newModel(startResource string) model {
 	m := model{
 		spring:       harmonica.NewSpring(harmonica.FPS(60), 6.0, 0.7),
 		config:       cfg,
-		quickActions: buildQuickActions(cfg),
 		history:      history,
 		agentHistory: agentHistory,
 		favorites:    favorites,
@@ -270,8 +267,6 @@ func (m *model) initViewComponents() {
 		return
 	}
 
-	meta := toolMetadata[res.name]
-
 	contentW := m.width - 4
 	contentH := m.height - 8
 
@@ -285,32 +280,6 @@ func (m *model) initViewComponents() {
 	m.contentView = viewport.New(contentW, contentH)
 	m.contentView.Style = lipgloss.NewStyle()
 
-	columns := []table.Column{
-		{Title: "Command", Width: contentW - 50},
-		{Title: "Description", Width: 45},
-	}
-
-	tableStyles := table.DefaultStyles()
-	tableStyles.Header = tableStyles.Header.
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		BorderBottom(true).
-		Bold(true).
-		Foreground(meta.color)
-	tableStyles.Selected = tableStyles.Selected.
-		Foreground(lipgloss.Color("255")).
-		Background(lipgloss.Color("237")).
-		Bold(true)
-	tableStyles.Cell = lipgloss.NewStyle()
-
-	m.commandTable = table.New(
-		table.WithColumns(columns),
-		table.WithRows([]table.Row{}),
-		table.WithFocused(true),
-		table.WithHeight(contentH),
-		table.WithStyles(tableStyles),
-	)
-
 	m.updateViewportContent()
 	m.viewReady = true
 }
@@ -319,7 +288,7 @@ func (m *model) updateViewportContent() {
 	sec := m.currentSection()
 	if sec == nil {
 		m.contentView.SetContent("No content")
-		m.commandTable.SetRows([]table.Row{})
+		m.cachedMarkdownContext = ""
 		return
 	}
 
@@ -331,61 +300,61 @@ func (m *model) updateViewportContent() {
 		m.cmdCursor = 0
 	}
 
-	rows := make([]table.Row, len(m.commands))
-	maxHighlightedWidth := 0
+	// Build the interactive command list as viewport content
+	commandList := m.renderCommandList(m.contentView.Width, meta.color)
 
-	for i, cmd := range m.commands {
-		highlightedCmd := highlightShellCommand(cmd.raw)
-		rows[i] = table.Row{highlightedCmd, cmd.description}
-
-		highlightedWidth := runewidth.StringWidth(highlightedCmd)
-		if highlightedWidth > maxHighlightedWidth {
-			maxHighlightedWidth = highlightedWidth
-		}
-	}
-
-	m.commandTable.SetRows(rows)
-	m.commandTable.SetCursor(m.cmdCursor)
-
-	availableWidth := m.contentView.Width
-	cmdColWidth := maxHighlightedWidth + 5
-	minDescWidth := 40
-
-	if cmdColWidth > availableWidth-minDescWidth {
-		cmdColWidth = availableWidth - minDescWidth
-	}
-
-	descColWidth := availableWidth - cmdColWidth
-	if descColWidth < 30 {
-		descColWidth = 30
-	}
-
-	columns := []table.Column{
-		{Title: "Command", Width: cmdColWidth},
-		{Title: "Description", Width: descColWidth},
-	}
-	m.commandTable.SetColumns(columns)
-
-	content := sec.content
-	lines := strings.Split(content, "\n")
-	var processedLines []string
-
+	// Check for non-command content to render as markdown context below
+	m.cachedMarkdownContext = ""
+	lines := strings.Split(sec.content, "\n")
+	cmdRunRe := regexp.MustCompile("`[^`]+`\\s*[^^]*\\s*\\^run")
+	var contextLines []string
 	for _, line := range lines {
-		cleanLine := regexp.MustCompile(`\s*\^run(?::\w+)?`).ReplaceAllString(line, "")
-		processedLines = append(processedLines, cleanLine)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || cmdRunRe.MatchString(line) {
+			continue
+		}
+		contextLines = append(contextLines, line)
 	}
-	content = strings.Join(processedLines, "\n")
+	if len(contextLines) > 0 {
+		m.cachedMarkdownContext = strings.Join(contextLines, "\n")
+	}
 
-	dynamicStyleJSON := strings.Replace(customStyleJSON, `"color": "114"`, fmt.Sprintf(`"color": "%s"`, string(meta.color)), 1)
-
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithStylesFromJSONBytes([]byte(dynamicStyleJSON)),
-		glamour.WithWordWrap(m.contentView.Width),
-	)
-	rendered, _ := r.Render(content)
-
-	m.contentView.SetContent(rendered)
+	if m.cachedMarkdownContext != "" {
+		m.contentView.SetContent(commandList + "\n\n" + m.cachedMarkdownContext)
+	} else {
+		m.contentView.SetContent(commandList)
+	}
 	m.contentView.GotoTop()
+}
+
+// refreshCommandListDisplay re-renders the viewport when the cursor changes
+// without re-parsing commands or re-processing markdown.
+func (m *model) refreshCommandListDisplay() {
+	res := m.currentResource()
+	if res == nil || len(m.commands) == 0 {
+		return
+	}
+	meta := toolMetadata[res.name]
+	commandList := m.renderCommandList(m.contentView.Width, meta.color)
+
+	if m.cachedMarkdownContext != "" {
+		m.contentView.SetContent(commandList + "\n\n" + m.cachedMarkdownContext)
+	} else {
+		m.contentView.SetContent(commandList)
+	}
+
+	// Keep selected command visible in the viewport
+	// Each command row is ~1 line, header takes ~4 lines
+	headerLines := 4
+	selectedLine := headerLines + m.cmdCursor
+	viewTop := m.contentView.YOffset
+	viewBottom := viewTop + m.contentView.Height
+
+	if selectedLine < viewTop {
+		m.contentView.SetYOffset(selectedLine)
+	} else if selectedLine >= viewBottom {
+		m.contentView.SetYOffset(selectedLine - m.contentView.Height + 1)
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -799,12 +768,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 
-			case "up", "k", "down", "j":
+			case "up", "k":
 				if len(m.commands) > 0 {
-					var cmd tea.Cmd
-					m.commandTable, cmd = m.commandTable.Update(msg)
-					m.cmdCursor = m.commandTable.Cursor()
-					return m, cmd
+					if m.cmdCursor > 0 {
+						m.cmdCursor--
+					} else {
+						m.cmdCursor = len(m.commands) - 1
+					}
+					m.refreshCommandListDisplay()
+				}
+				return m, nil
+
+			case "down", "j":
+				if len(m.commands) > 0 {
+					if m.cmdCursor < len(m.commands)-1 {
+						m.cmdCursor++
+					} else {
+						m.cmdCursor = 0
+					}
+					m.refreshCommandListDisplay()
+				}
+				return m, nil
+
+			case "ctrl+y":
+				if len(m.commands) > 0 && m.cmdCursor < len(m.commands) {
+					cmdText := m.commands[m.cmdCursor].raw
+					if err := clipboard.WriteAll(cmdText); err != nil {
+						return m, m.showNotification("!", "Copy failed: "+err.Error(), "error")
+					}
+					displayCmd := cmdText
+					if len(displayCmd) > 25 {
+						displayCmd = displayCmd[:22] + "..."
+					}
+					return m, m.showNotification("", "Copied: "+displayCmd, "success")
 				}
 				return m, nil
 

@@ -14,111 +14,15 @@ var (
 	secondary = lipgloss.Color("114") // Green
 	subtle    = lipgloss.Color("242") // Gray
 	dimBorder = lipgloss.Color("238") // Subtle borders
-	dark      = lipgloss.Color("235") // Dark bg
 	white     = lipgloss.Color("255")
 )
 
 // Styles
 var (
-	// Dashboard card - normal
-	cardStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(dimBorder).
-			Padding(0, 1)
-
-	// Dashboard card - selected
-	selectedCardStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(primary).
-				Padding(0, 1)
-
-	// Card title
-	cardTitleStyle = lipgloss.NewStyle().
-			Foreground(white).
-			Bold(true)
-
-	// Card subtitle (category/type)
-	cardSubtitleStyle = lipgloss.NewStyle().
-				Foreground(secondary).
-				Italic(true)
-
-	// Card description
-	cardDescStyle = lipgloss.NewStyle().
-			Foreground(subtle)
-
-	// Number hint (large, on left of card)
-	numberStyle = lipgloss.NewStyle().
-			Foreground(subtle).
-			Width(3)
-
-	// Section header (underlined)
-	sectionHeaderStyle = lipgloss.NewStyle().
-				Foreground(secondary).
-				Bold(true).
-				Underline(true).
-				MarginTop(1).
-				MarginBottom(1)
-
-	// Header/branding
-	brandStyle = lipgloss.NewStyle().
-			Foreground(primary).
-			Bold(true)
-
-	brandDescStyle = lipgloss.NewStyle().
-			Foreground(white)
-
-	// Detail view panes
+	// Dashboard sidebar pane
 	paneStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(dimBorder)
-
-	focusedPaneStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(primary)
-
-	paneTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(secondary)
-
-	// List items
-	selectedItem = lipgloss.NewStyle().
-			Foreground(primary).
-			Bold(true).
-			Border(lipgloss.Border{Left: "┃"}).
-			BorderForeground(primary).
-			PaddingLeft(1)
-
-	normalItem = lipgloss.NewStyle().
-			Foreground(white).
-			PaddingLeft(2)
-
-	dimItem = lipgloss.NewStyle().
-		Foreground(subtle)
-
-	// Section tabs
-	activeTabStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(primary).
-			Underline(true).
-			Padding(0, 1)
-
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(subtle).
-				Padding(0, 1)
-
-	// Status bar
-	statusKeyStyle = lipgloss.NewStyle().
-			Foreground(primary).
-			Bold(true)
-
-	statusTextStyle = lipgloss.NewStyle().
-			Foreground(white)
-
-	statusMutedStyle = lipgloss.NewStyle().
-				Foreground(subtle)
-
-	statusBarBg = lipgloss.NewStyle().
-			Background(dark)
 )
 
 // customStyleJSON is the custom glamour style for premium markdown rendering

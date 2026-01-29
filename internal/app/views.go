@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -396,29 +395,39 @@ func (m model) renderDashboard() string {
 	return body
 }
 
-// renderCommandList renders a beautiful command list with selection highlighting
+// renderCommandList renders an interactive command list with selection highlighting.
 func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 	if len(m.commands) == 0 {
-		emptyStyle := lipgloss.NewStyle().
+		return lipgloss.NewStyle().
 			Foreground(subtle).
 			Italic(true).
-			Padding(2, 2)
-		return emptyStyle.Render("No runnable commands in this section")
+			Padding(2, 4).
+			Render("No runnable commands in this section")
 	}
 
-	var lines []string
+	// Header block
+	headerLabel := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("COMMANDS")
+	headerCount := lipgloss.NewStyle().Foreground(subtle).Render(fmt.Sprintf("  %d available", len(m.commands)))
+	divider := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render(strings.Repeat("─", width-6))
+	header := lipgloss.NewStyle().PaddingLeft(2).MarginBottom(1).Render(
+		lipgloss.JoinVertical(lipgloss.Left, headerLabel+headerCount, divider),
+	)
 
-	availableW := width - 11
-	cmdW := (availableW * 50) / 100
+	// Column widths
+	prefixW := 8 // " ▶  1  " or "     1  "
+	sepW := 3    // " │ "
+	availableW := width - prefixW - sepW - 4
+	cmdW := (availableW * 55) / 100
 	descW := availableW - cmdW
-
-	if cmdW < 25 {
-		cmdW = 25
+	if cmdW < 28 {
+		cmdW = 28
 	}
-	if descW < 15 {
-		descW = 15
+	if descW < 12 {
+		descW = 12
 	}
 
+	// Command rows
+	var rows []string
 	for i, cmd := range m.commands {
 		isSelected := i == m.cmdCursor
 
@@ -426,67 +435,51 @@ func (m model) renderCommandList(width int, accentColor lipgloss.Color) string {
 		if len(cmdText) > cmdW-2 {
 			cmdText = cmdText[:cmdW-5] + "..."
 		}
-
 		descText := cmd.description
 		if len(descText) > descW-2 {
 			descText = descText[:descW-5] + "..."
 		}
 
-		cmdPadded := cmdText + strings.Repeat(" ", max(0, cmdW-len(cmdText)))
+		highlighted := highlightShellCommand(cmdText)
+		cmdPad := max(0, cmdW-lipgloss.Width(highlighted))
+
+		var inputBadge string
+		if cmd.inputVar != "" {
+			inputBadge = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("213")).
+				Render(" {{" + cmd.inputVar + "}}")
+		}
 
 		if isSelected {
-			indicator := lipgloss.NewStyle().
-				Foreground(accentColor).
-				Bold(true).
-				Render("▶ ")
+			arrow := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(" ▶ ")
+			num := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render(fmt.Sprintf("%-3d", i+1))
+			sep := lipgloss.NewStyle().Foreground(accentColor).Render(" │ ")
+			cmdStyled := lipgloss.NewStyle().Background(lipgloss.Color("239")).Bold(true).
+				Render(" " + highlighted + strings.Repeat(" ", cmdPad) + " ")
+			desc := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true).Render(descText)
 
-			num := lipgloss.NewStyle().
-				Foreground(accentColor).
-				Bold(true).
-				Render(fmt.Sprintf("%-3d", i+1))
+			row := arrow + num + sep + cmdStyled + inputBadge + "  " + desc
+			rowW := lipgloss.Width(row)
+			if rowW < width-3 {
+				row += strings.Repeat(" ", width-3-rowW)
+			}
 
-			cmdStyled := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("255")).
-				Background(lipgloss.Color("240")).
-				Bold(true).
-				Render(" " + cmdPadded + " ")
-
-			desc := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252")).
-				Render(descText)
-
-			row := indicator + num + cmdStyled + " " + desc
-
-			line := lipgloss.NewStyle().
-				Foreground(accentColor).
-				Render("┃") + " " +
-				lipgloss.NewStyle().
-					Background(lipgloss.Color("237")).
-					Render(row)
-
-			lines = append(lines, line)
-
+			bar := lipgloss.NewStyle().Foreground(accentColor).Background(lipgloss.Color("236")).Render("┃")
+			rows = append(rows, bar+lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(row))
 		} else {
-			num := lipgloss.NewStyle().
-				Foreground(subtle).
-				Render(fmt.Sprintf("%-3d", i+1))
+			num := lipgloss.NewStyle().Foreground(subtle).Render(fmt.Sprintf("     %-3d", i+1))
+			sep := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render(" │ ")
+			cmdStyled := lipgloss.NewStyle().Background(lipgloss.Color("235")).
+				Render(" " + highlighted + strings.Repeat(" ", cmdPad) + " ")
+			desc := lipgloss.NewStyle().Foreground(subtle).Render(descText)
 
-			cmdStyled := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("213")).
-				Background(lipgloss.Color("236")).
-				Render(" " + cmdPadded + " ")
-
-			desc := lipgloss.NewStyle().
-				Foreground(subtle).
-				Render(descText)
-
-			row := "  " + num + cmdStyled + " " + desc
-
-			lines = append(lines, row)
+			rows = append(rows, " "+num+sep+cmdStyled+inputBadge+"  "+desc)
 		}
 	}
 
-	return strings.Join(lines, "\n")
+	commandBlock := lipgloss.NewStyle().MarginTop(1).Render(strings.Join(rows, "\n"))
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, commandBlock)
 }
 
 // renderResourceView renders the full-screen resource view
@@ -654,122 +647,6 @@ func (m model) renderResourceView() string {
 	}
 
 	return view
-}
-
-func (m model) renderDetailView() string {
-	leftW := 18
-	rightW := m.width - leftW - 3
-	contentH := m.height - 2
-
-	leftPane := paneStyle.Width(leftW).Height(contentH).Render(m.renderResources(contentH - 2))
-
-	rightContent := m.renderRightPane(rightW-2, contentH-2)
-	rightPane := focusedPaneStyle.Width(rightW).Height(contentH).Render(rightContent)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, " ", rightPane)
-}
-
-func (m model) renderResources(h int) string {
-	var lines []string
-
-	title := paneTitleStyle.Render("Resources")
-	lines = append(lines, title, "")
-
-	for i, res := range m.resources {
-		if i >= h-2 {
-			break
-		}
-
-		style := normalItem
-		prefix := "  "
-		if i == m.resCursor {
-			style = selectedItem
-			prefix = "> "
-		}
-
-		lines = append(lines, style.Render(prefix+res.name))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func (m model) renderRightPane(w, h int) string {
-	res := m.currentResource()
-	if res == nil {
-		return dimItem.Render("No resource selected")
-	}
-
-	tabs := m.renderSectionTabs(w)
-
-	content := m.renderContent(w, h-3)
-
-	return lipgloss.JoinVertical(lipgloss.Left, tabs, content)
-}
-
-func (m model) renderSectionTabs(maxW int) string {
-	res := m.currentResource()
-	if res == nil {
-		return ""
-	}
-
-	var tabs []string
-	totalW := 0
-
-	for i, sec := range res.sections {
-		style := inactiveTabStyle
-		if i == m.secCursor {
-			style = activeTabStyle
-		}
-
-		title := sec.title
-		if len(title) > 12 {
-			title = title[:10] + ".."
-		}
-
-		label := title
-		if i < 9 {
-			label = fmt.Sprintf("%d %s", i+1, title)
-		}
-
-		tab := style.Render(label)
-		tabW := lipgloss.Width(tab) + 2
-
-		if totalW+tabW > maxW-2 {
-			tabs = append(tabs, dimItem.Render("..."))
-			break
-		}
-
-		tabs = append(tabs, tab)
-		totalW += tabW
-	}
-
-	return strings.Join(tabs, dimItem.Render(" · "))
-}
-
-func (m model) renderContent(w, h int) string {
-	sec := m.currentSection()
-	if sec == nil {
-		return dimItem.Render("No content")
-	}
-
-	r, _ := glamour.NewTermRenderer(
-		glamour.WithStylesFromJSONBytes([]byte(customStyleJSON)),
-		glamour.WithWordWrap(w),
-	)
-	rendered, _ := r.Render(sec.content)
-	lines := strings.Split(rendered, "\n")
-
-	scroll := m.scroll
-	if scroll >= len(lines) {
-		scroll = max(0, len(lines)-1)
-	}
-
-	end := min(scroll+h, len(lines))
-	if end <= scroll {
-		return ""
-	}
-
-	return strings.Join(lines[scroll:end], "\n")
 }
 
 func (m model) renderStatusBar() string {
