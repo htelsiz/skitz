@@ -290,6 +290,7 @@ Auto-discovered from `~/.config/skitz/resources/` and exposed in the dashboard:
 - `claude` - Claude AI assistant
 - `cursor` - Cursor editor shortcuts
 - `docker` - Docker commands
+- `gcp` - Google Cloud CLI commands
 - `git` - Git commands
 - `mcp` - Model Context Protocol reference
 
