@@ -201,7 +201,7 @@ Task:        %s`,
 		dconfig.AIDeployment,
 		dconfig.AIModel,
 		dconfig.DeployMethod,
-		truncateStr(dconfig.Prompt, 35),
+		truncate(dconfig.Prompt, 35),
 	)
 	tap.Box(summaryText, "Deployment Summary", tap.BoxOptions{})
 
@@ -354,13 +354,6 @@ func checkAzureCLI() bool {
 func checkAzureDevOpsCLI() bool {
 	cmd := exec.Command("az", "extension", "show", "--name", "azure-devops")
 	return cmd.Run() == nil
-}
-
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
 }
 
 func waitForEnter() {
@@ -578,7 +571,7 @@ steps:
 		tmpFile,
 		dconfig.AIModel,
 		dconfig.AIDeployment,
-		truncateStr(dconfig.Prompt, 60),
+		truncate(dconfig.Prompt, 60),
 	)
 
 	return result, nil

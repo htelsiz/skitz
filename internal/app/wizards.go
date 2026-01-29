@@ -1184,3 +1184,227 @@ func (m *model) openConfigInEditor() tea.Cmd {
 		Mode:    CommandInteractive,
 	})
 }
+
+// Saved Agent Wizard
+
+func (m *model) startSavedAgentWizard(agent config.SavedAgentConfig) tea.Cmd {
+	// Check if any providers are configured
+	var enabledProviders []config.ProviderConfig
+	for _, p := range m.config.AI.Providers {
+		if p.Enabled {
+			enabledProviders = append(enabledProviders, p)
+		}
+	}
+
+	if len(enabledProviders) == 0 {
+		return m.showNotification("!", "No AI providers configured. Go to Actions > Configure Providers first.", "error")
+	}
+
+	m.savedAgentWizard = &SavedAgentWizard{
+		Step:      0,
+		AgentID:   agent.ID,
+		AgentName: agent.Name,
+		Image:     agent.Image,
+		BuildPath: agent.BuildPath,
+	}
+	return m.buildSavedAgentForm()
+}
+
+func (m *model) buildSavedAgentForm() tea.Cmd {
+	wizard := m.savedAgentWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0:
+		// Step 0: Select provider
+		var options []huh.Option[string]
+		for _, p := range m.config.AI.Providers {
+			if p.Enabled {
+				label := p.Name
+				if p.Name == m.config.AI.DefaultProvider {
+					label += " (default)"
+				}
+				options = append(options, huh.NewOption(label, p.Name))
+			}
+		}
+
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Provider").
+					Description("Which AI provider should the agent use?").
+					Options(options...).
+					Value(&wizard.Provider),
+			),
+		).
+			WithWidth(60).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 1:
+		// Step 1: Select resource
+		var options []huh.Option[string]
+		for _, res := range m.resources {
+			options = append(options, huh.NewOption(res.name, res.name))
+		}
+
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Resource").
+					Description("Which resource should be verified?").
+					Options(options...).
+					Value(&wizard.Resource),
+			),
+		).
+			WithWidth(60).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 2:
+		// Step 2: Enter additional instructions (optional)
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Additional Instructions (optional)").
+					Description("Any specific commands or areas to focus on?").
+					Placeholder("Focus on pod creation commands...").
+					Value(&wizard.Prompt),
+			),
+		).
+			WithWidth(60).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 3:
+		// Step 3: Confirm
+		desc := fmt.Sprintf("Verify %s resource with %s", wizard.Resource, wizard.Provider)
+		if wizard.Prompt != "" {
+			desc += fmt.Sprintf("\nInstructions: %s", truncate(wizard.Prompt, 40))
+		}
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Run Agent?").
+					Description(desc).
+					Affirmative("Run").
+					Negative("Cancel").
+					Value(&wizard.Confirmed),
+			),
+		).
+			WithWidth(60).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+	}
+
+	return nil
+}
+
+func (m *model) nextSavedAgentStep() tea.Cmd {
+	wizard := m.savedAgentWizard
+	if wizard == nil {
+		return nil
+	}
+
+	wizard.Step++
+	if wizard.Step > 3 {
+		return m.executeSavedAgent()
+	}
+
+	return m.buildSavedAgentForm()
+}
+
+func (m *model) executeSavedAgent() tea.Cmd {
+	wizard := m.savedAgentWizard
+	if wizard == nil {
+		return nil
+	}
+
+	if !wizard.Confirmed {
+		m.savedAgentWizard = nil
+		return nil
+	}
+
+	// Find the selected provider
+	var provider *config.ProviderConfig
+	for _, p := range m.config.AI.Providers {
+		if p.Name == wizard.Provider && p.Enabled {
+			provider = &p
+			break
+		}
+	}
+
+	if provider == nil {
+		m.savedAgentWizard = nil
+		return m.showNotification("!", "Selected provider not found or disabled", "error")
+	}
+
+	// Check Docker is available
+	if _, err := exec.LookPath("docker"); err != nil {
+		m.savedAgentWizard = nil
+		return m.showNotification("!", "Docker not found. Install from https://docs.docker.com/get-docker/", "error")
+	}
+
+	agentName := wizard.AgentName
+	image := wizard.Image
+	buildPath := wizard.BuildPath
+	resource := wizard.Resource
+	prompt := wizard.Prompt
+
+	m.savedAgentWizard = nil
+
+	// Determine API key env var
+	envVar := "ANTHROPIC_API_KEY"
+	if provider.ProviderType == "openai" {
+		envVar = "OPENAI_API_KEY"
+	}
+
+	// Generate unique ID
+	agentID := uuid.New().String()
+
+	// Use container name as ID for easier tracking
+	containerName := "skitz-" + agentID[:8] // Use first 8 chars of UUID
+
+	// Create ActiveAgent entry
+	activeAgent := ActiveAgent{
+		ID:        containerName,
+		Name:      agentName,
+		Provider:  provider.Name,
+		Runtime:   "docker",
+		StartTime: time.Now(),
+		Status:    "building",
+		Task:      prompt,
+	}
+
+	// Build and run docker command
+	var cmd string
+	if buildPath != "" {
+		// Build image first, then run with repo mounted read-only
+		cmd = fmt.Sprintf(`docker build -t %s %s && docker run --rm --name %s -v "$(pwd):/skitz:ro" -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
+			image, buildPath, containerName, envVar, provider.APIKey, resource, prompt, image)
+	} else {
+		// Just run (image should exist)
+		cmd = fmt.Sprintf(`docker run --rm --name %s -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
+			containerName, envVar, provider.APIKey, resource, prompt, image)
+	}
+
+	return tea.Batch(
+		func() tea.Msg {
+			return agentStartedMsg{agent: activeAgent}
+		},
+		m.runAgentCommand(CommandSpec{
+			Command: cmd,
+			Mode:    CommandEmbedded,
+		}, agentID),
+	)
+}

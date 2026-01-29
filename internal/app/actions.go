@@ -33,12 +33,13 @@ func buildQuickActions(cfg config.Config) []QuickAction {
 		icon    string
 		handler func(m *model) (tea.Cmd, bool)
 	}{
-		"repeat_last":  {"Repeat Last", "⚡", actionRepeatLast},
-		"copy_command": {"Copy Command", "📋", actionCopyCommand},
-		"search":       {"Search", "🔍", actionSearch},
-		"edit_file":    {"Edit File", "📝", actionEditFile},
-		"favorite":     {"Favorite", "⭐", actionToggleFavorite},
-		"refresh":      {"Refresh", "🔄", actionRefresh},
+		"repeat_last":     {"Repeat Last", "⚡", actionRepeatLast},
+		"copy_command":    {"Copy Command", "📋", actionCopyCommand},
+		"search":          {"Search", "🔍", actionSearch},
+		"edit_file":       {"Edit File", "📝", actionEditFile},
+		"favorite":        {"Favorite", "⭐", actionToggleFavorite},
+		"refresh":         {"Refresh", "🔄", actionRefresh},
+		"reset_resources": {"Reset Resources", "↺", actionResetResources},
 	}
 
 	for _, b := range cfg.QuickActions.Builtin {
@@ -206,4 +207,19 @@ func actionRefresh(m *model) (tea.Cmd, bool) {
 		m.updateViewportContent()
 	}
 	return m.showNotification("🔄", fmt.Sprintf("Refreshed %d resources", len(m.resources)), "success"), true
+}
+
+func actionResetResources(m *model) (tea.Cmd, bool) {
+	// Remove user resources directory to restore embedded defaults
+	if err := os.RemoveAll(config.ResourcesDir); err != nil {
+		return m.showNotification("❌", "Failed to reset: "+err.Error(), "error"), true
+	}
+
+	// Reload resources from embedded
+	m.resources = nil
+	m.loadResources()
+	if m.currentView == viewDetail {
+		m.currentView = viewDashboard
+	}
+	return m.showNotification("↺", fmt.Sprintf("Reset to %d default resources", len(m.resources)), "success"), true
 }

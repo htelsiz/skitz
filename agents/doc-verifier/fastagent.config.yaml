@@ -1,9 +1,9 @@
 # Fast-Agent Verifier Configuration
-default_model: sonnet
+default_model: gpt-5.2
 
 logger:
   progress_display: true
-  
+
 mcp:
   servers:
     fetch:

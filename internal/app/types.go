@@ -95,6 +95,20 @@ type RunAgentWizard struct {
 	InputForm *huh.Form
 }
 
+// SavedAgentWizard holds state for running a saved agent
+type SavedAgentWizard struct {
+	Step      int    // 0=provider, 1=resource, 2=prompt, 3=confirm
+	AgentID   string // ID of the saved agent
+	AgentName string // Display name
+	Image     string // Docker image
+	BuildPath string // Path to build if needed
+	Provider  string // Selected provider name
+	Resource  string // Selected resource name
+	Prompt    string
+	Confirmed bool
+	InputForm *huh.Form
+}
+
 // section represents a documentation section within a resource
 type section struct {
 	title   string
@@ -241,6 +255,18 @@ var toolMetadata = map[string]toolMeta{
 		cmdCount:    32,
 		lastUsed:    "",
 		topCommands: []string{"codex", "codex --help", "codex -a full-auto"},
+	},
+	"gcp": {
+		icon: "◈",
+		asciiArt: `╭───╮
+│ ◈ │
+╰───╯`,
+		color:       lipgloss.Color("33"),
+		category:    "Cloud",
+		status:      "active",
+		cmdCount:    15,
+		lastUsed:    "",
+		topCommands: []string{"gcloud auth login", "gcloud projects list", "gcloud ai models list"},
 	},
 }
 

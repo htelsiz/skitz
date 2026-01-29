@@ -551,11 +551,135 @@ func (m *model) handleWizardKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// handleAgentsTabKeys handles keyboard input for the Agents tab
+// moveDashboardCursor moves the current tab's cursor by delta, bounded by count
+func (m *model) moveDashboardCursor(delta, count int) {
+	switch m.dashboardTab {
+	case 0:
+		m.resCursor += delta
+		if m.resCursor < 0 {
+			m.resCursor = 0
+		} else if m.resCursor >= count {
+			m.resCursor = count - 1
+		}
+	case 1:
+		m.actionCursor += delta
+		if m.actionCursor < 0 {
+			m.actionCursor = 0
+		} else if m.actionCursor >= count {
+			m.actionCursor = count - 1
+		}
+	case 2:
+		m.agentCursor += delta
+		if m.agentCursor < 0 {
+			m.agentCursor = 0
+		} else if m.agentCursor >= count {
+			m.agentCursor = count - 1
+		}
+	}
+}
+
+// setDashboardCursor sets the current tab's cursor to idx
+func (m *model) setDashboardCursor(idx int) {
+	switch m.dashboardTab {
+	case 0:
+		m.resCursor = idx
+	case 1:
+		m.actionCursor = idx
+	case 2:
+		m.agentCursor = idx
+	}
+}
+
+// getDashboardItemCount returns item count for current tab
+func (m *model) getDashboardItemCount() int {
+	switch m.dashboardTab {
+	case 0:
+		return len(m.resources)
+	case 1:
+		return len(m.actionItems)
+	case 2:
+		return len(m.savedAgents) + len(m.activeAgents) + len(m.agentHistory)
+	}
+	return 0
+}
+
+// handleDashboardEnter handles Enter key for current tab
+func (m *model) handleDashboardEnter() tea.Cmd {
+	switch m.dashboardTab {
+	case 0: // Resources - open detail view
+		m.currentView = viewDetail
+		m.secCursor = 0
+		m.initViewComponents()
+		return nil
+	case 1: // Actions - execute handler
+		if m.actionCursor < len(m.actionItems) {
+			if h := m.actionItems[m.actionCursor].Handler; h != nil {
+				return h(m)
+			}
+		}
+		return nil
+	case 2: // Agents - run or view
+		return m.handleAgentEnter()
+	}
+	return nil
+}
+
+// handleAgentEnter handles Enter on Agents tab
+func (m *model) handleAgentEnter() tea.Cmd {
+	savedLen := len(m.savedAgents)
+	activeLen := len(m.activeAgents)
+	if m.agentCursor < savedLen {
+		return m.startSavedAgentWizard(m.savedAgents[m.agentCursor])
+	} else if m.agentCursor < savedLen+activeLen {
+		// Active agent - show status/output
+		activeIdx := m.agentCursor - savedLen
+		if activeIdx < len(m.activeAgents) {
+			m.selectedAgentIdx = activeIdx
+			m.agentViewMode = 2 // Mode 2 = active agent view
+		}
+	} else if m.agentCursor >= savedLen+activeLen {
+		historyIdx := m.agentCursor - savedLen - activeLen
+		if historyIdx < len(m.agentHistory) {
+			m.selectedAgentIdx = historyIdx
+			m.agentViewMode = 1 // Mode 1 = history view
+		}
+	}
+	return nil
+}
+
+// handleAgentsTabKeys handles keyboard input for Agents tab wizard and detail view
 func (m *model) handleAgentsTabKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 
-	// In detail view
+	// Handle saved agent wizard form
+	if m.savedAgentWizard != nil && m.savedAgentWizard.InputForm != nil {
+		switch keyStr {
+		case "esc":
+			m.savedAgentWizard = nil
+			return m, nil
+		default:
+			form, cmd := m.savedAgentWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.savedAgentWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextSavedAgentStep()
+				}
+			}
+			return m, cmd
+		}
+	}
+
+	// In active agent detail view
+	if m.agentViewMode == 2 {
+		switch keyStr {
+		case "esc", "q":
+			m.agentViewMode = 0
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// In history detail view
 	if m.agentViewMode == 1 {
 		switch keyStr {
 		case "esc", "q":
@@ -599,157 +723,63 @@ func (m *model) handleAgentsTabKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// In list view
-	totalItems := len(m.activeAgents) + len(m.agentHistory)
-
-	switch keyStr {
-	case "up", "k":
-		if m.agentCursor > 0 {
-			m.agentCursor--
-		}
-		return m, nil
-
-	case "down", "j":
-		if m.agentCursor < totalItems-1 {
-			m.agentCursor++
-		}
-		return m, nil
-
-	case "enter":
-		// Can only view details for history items, not active agents
-		historyIdx := m.agentCursor - len(m.activeAgents)
-		if historyIdx >= 0 && historyIdx < len(m.agentHistory) {
-			m.selectedAgentIdx = historyIdx
-			m.agentViewMode = 1
-		}
-		return m, nil
-
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		idx := int(keyStr[0] - '1')
-		if idx < totalItems {
-			m.agentCursor = idx
-			// If it's a history item, go to detail view
-			historyIdx := idx - len(m.activeAgents)
-			if historyIdx >= 0 && historyIdx < len(m.agentHistory) {
-				m.selectedAgentIdx = historyIdx
-				m.agentViewMode = 1
-			}
-		}
-		return m, nil
-	}
-
 	return m, nil
 }
 
 // handleDashboardKeys handles keyboard input in the dashboard view
 func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Route to agents tab handler if on agents tab (except for global keys)
+	// Handle Agents tab special cases (wizard, detail view)
 	if m.dashboardTab == 2 {
-		keyStr := msg.String()
-		// Handle global keys first
-		switch keyStr {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "tab", "shift+tab":
-			if keyStr == "tab" {
-				m.dashboardTab = (m.dashboardTab + 1) % 3
-			} else {
-				m.dashboardTab = (m.dashboardTab + 2) % 3
-			}
-			m.agentCursor = 0
-			m.agentViewMode = 0
-			return m, nil
-		default:
+		if m.savedAgentWizard != nil && m.savedAgentWizard.InputForm != nil {
+			return m.handleAgentsTabKeys(msg)
+		}
+		if m.agentViewMode == 1 || m.agentViewMode == 2 {
 			return m.handleAgentsTabKeys(msg)
 		}
 	}
+
+	count := m.getDashboardItemCount()
 
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
 	case "tab", "shift+tab":
-		// Switch between Resources, Actions, and Agents tabs
 		if msg.String() == "tab" {
 			m.dashboardTab = (m.dashboardTab + 1) % 3
 		} else {
-			m.dashboardTab = (m.dashboardTab + 2) % 3 // Go backwards
+			m.dashboardTab = (m.dashboardTab + 2) % 3
 		}
-		// Reset cursors when switching tabs
 		m.agentCursor = 0
 		m.agentViewMode = 0
 		return m, nil
 
-	case "enter":
-		if m.dashboardTab == 0 {
-			// Resources tab - open resource detail
-			m.currentView = viewDetail
-			m.secCursor = 0
-			m.initViewComponents()
-		} else if m.dashboardTab == 1 {
-			// Actions tab - execute action
-			if len(m.actionItems) > 0 && m.actionCursor < len(m.actionItems) {
-				action := m.actionItems[m.actionCursor]
-				if action.Handler != nil {
-					return m, action.Handler(m)
-				}
-			}
-		}
-		return m, nil
-
-	case "e":
-		// Edit selected resource in external editor
-		if m.dashboardTab == 0 {
-			return m, m.editResource()
-		}
-		return m, nil
-
-	case "d":
-		// Delete selected resource
-		if m.dashboardTab == 0 {
-			return m, m.startDeleteResourceWizard()
-		}
-		return m, nil
-
 	case "up", "k":
-		if m.dashboardTab == 0 {
-			if m.resCursor > 0 {
-				m.resCursor--
-			}
-		} else if m.dashboardTab == 1 {
-			if m.actionCursor > 0 {
-				m.actionCursor--
-			}
-		}
+		m.moveDashboardCursor(-1, count)
+		return m, nil
 
 	case "down", "j":
-		if m.dashboardTab == 0 {
-			if m.resCursor < len(m.resources)-1 {
-				m.resCursor++
-			}
-		} else if m.dashboardTab == 1 {
-			if m.actionCursor < len(m.actionItems)-1 {
-				m.actionCursor++
-			}
-		}
+		m.moveDashboardCursor(1, count)
+		return m, nil
+
+	case "enter":
+		return m, m.handleDashboardEnter()
 
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		idx := int(msg.String()[0] - '1')
+		if idx < count {
+			m.setDashboardCursor(idx)
+			return m, m.handleDashboardEnter()
+		}
+
+	case "e":
 		if m.dashboardTab == 0 {
-			if idx < len(m.resources) {
-				m.resCursor = idx
-				m.currentView = viewDetail
-				m.secCursor = 0
-				m.initViewComponents()
-			}
-		} else if m.dashboardTab == 1 {
-			if idx < len(m.actionItems) {
-				m.actionCursor = idx
-				action := m.actionItems[m.actionCursor]
-				if action.Handler != nil {
-					return m, action.Handler(m)
-				}
-			}
+			return m, m.editResource()
+		}
+
+	case "d":
+		if m.dashboardTab == 0 {
+			return m, m.startDeleteResourceWizard()
 		}
 	}
 

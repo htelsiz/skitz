@@ -31,6 +31,7 @@ type Config struct {
 	Favorites    []string           `yaml:"favorites"`
 	AI           AIConfig           `yaml:"ai,omitempty"`
 	MCP          MCPConfig          `yaml:"mcp"`
+	SavedAgents  []SavedAgentConfig `yaml:"saved_agents,omitempty"`
 }
 
 type QuickActionsConfig struct {
@@ -83,6 +84,18 @@ type MCPConfig struct {
 	Enabled        bool              `yaml:"enabled"`
 	RefreshSeconds int               `yaml:"refresh_seconds"`
 	Servers        []MCPServerConfig `yaml:"servers"`
+}
+
+// SavedAgentConfig represents a saved/configured agent
+type SavedAgentConfig struct {
+	ID          string `yaml:"id"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Icon        string `yaml:"icon"`
+	Image       string `yaml:"image"`        // Docker image name
+	Builtin     bool   `yaml:"builtin"`      // true for bundled agents
+	BuildPath   string `yaml:"build_path"`   // path to Dockerfile dir (relative to repo root)
+	PromptHint  string `yaml:"prompt_hint"`  // placeholder text for prompt input
 }
 
 type MCPServerConfig struct {
@@ -286,4 +299,27 @@ func AddAgentInteraction(history []AgentInteraction, entry AgentInteraction, max
 	}
 
 	return history
+}
+
+// BuiltinAgents returns the list of built-in agents bundled with skitz
+func BuiltinAgents() []SavedAgentConfig {
+	return []SavedAgentConfig{
+		{
+			ID:          "doc-verifier",
+			Name:        "Doc Verifier",
+			Description: "Verify commands in Skitz resource files",
+			Icon:        "📋",
+			Image:       "doc-verifier",
+			Builtin:     true,
+			BuildPath:   "agents/doc-verifier",
+			PromptHint:  "Verify commands in kubectl.md resource",
+		},
+	}
+}
+
+// GetAllSavedAgents returns builtin agents merged with user-saved agents
+func GetAllSavedAgents(cfg Config) []SavedAgentConfig {
+	agents := BuiltinAgents()
+	agents = append(agents, cfg.SavedAgents...)
+	return agents
 }

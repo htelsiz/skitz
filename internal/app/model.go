@@ -66,11 +66,13 @@ type model struct {
 	favorites    map[string]bool
 
 	// Agents tab state
-	activeAgents       []ActiveAgent // Currently running agents
-	agentCursor        int           // Selection cursor for agents tab
-	agentViewMode      int           // 0=list, 1=detail
-	selectedAgentIdx   int           // Index for detail view
-	agentDetailScroll  int           // Scroll offset for detail view
+	activeAgents       []ActiveAgent             // Currently running agents
+	savedAgents        []config.SavedAgentConfig // Saved/builtin agents
+	agentCursor        int                       // Selection cursor for agents tab
+	agentViewMode      int                       // 0=list, 1=detail
+	selectedAgentIdx   int                       // Index for detail view
+	agentDetailScroll  int                       // Scroll offset for detail view
+	savedAgentWizard   *SavedAgentWizard         // Wizard for running saved agent
 
 	// Notification/Toast
 	notification *Notification
@@ -179,6 +181,7 @@ func newModel(startResource string) model {
 		history:      history,
 		agentHistory: agentHistory,
 		favorites:    favorites,
+		savedAgents:  config.GetAllSavedAgents(cfg),
 	}
 	m.loadResources()
 	m.actionItems = m.buildDashboardActions()
@@ -233,6 +236,16 @@ func (m *model) buildDashboardActions() []DashboardAction {
 			Description: "Edit skitz configuration",
 			Handler: func(m *model) tea.Cmd {
 				return m.editPreferences()
+			},
+		},
+		{
+			ID:          "reset_resources",
+			Name:        "Reset Resources",
+			Icon:        "↺",
+			Description: "Restore default resources",
+			Handler: func(m *model) tea.Cmd {
+				cmd, _ := actionResetResources(m)
+				return cmd
 			},
 		},
 	}
@@ -337,6 +350,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.runAgentWizard.InputForm = f
 				if f.State == huh.StateCompleted {
 					return m, m.nextRunAgentStep()
+				}
+			}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
+	// Forward non-key messages to saved agent wizard form
+	if m.savedAgentWizard != nil && m.savedAgentWizard.InputForm != nil {
+		if _, isKey := msg.(tea.KeyMsg); !isKey {
+			form, cmd := m.savedAgentWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.savedAgentWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextSavedAgentStep()
 				}
 			}
 			if cmd != nil {

@@ -283,55 +283,92 @@ func (m model) renderActionsTab(width, height int) string {
 	return lipgloss.NewStyle().Padding(0, 2).Render(content)
 }
 
-// renderAgentsTab renders the agents tab with active agents and history
+// renderAgentsTab renders the agents tab with saved agents, active agents, and history
 func (m model) renderAgentsTab(width, height int) string {
-	// Detail view
+	// Saved agent wizard
+	if m.savedAgentWizard != nil && m.savedAgentWizard.InputForm != nil {
+		return m.renderSavedAgentWizard(width, height)
+	}
+
+	// Active agent detail view
+	if m.agentViewMode == 2 && m.selectedAgentIdx < len(m.activeAgents) {
+		return m.renderActiveAgentDetail(width, height)
+	}
+
+	// History detail view
 	if m.agentViewMode == 1 && m.selectedAgentIdx < len(m.agentHistory) {
 		return m.renderAgentDetail(width, height)
 	}
 
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("213")).
+	sectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("243")).
 		Bold(true)
 
-	subtitleStyle := lipgloss.NewStyle().
-		Foreground(subtle).
-		Italic(true)
-
 	var sections []string
+	shortcut := 1
+	cursorOffset := 0
 
-	// Active Agents section
+	// Saved agents section
+	if len(m.savedAgents) > 0 {
+		var items []CardItem
+		for _, agent := range m.savedAgents {
+			tag := "SAVED"
+			tagColor := lipgloss.Color("99")
+			if agent.Builtin {
+				tag = "BUILTIN"
+			}
+			items = append(items, CardItem{
+				Title:       agent.Icon + " " + agent.Name,
+				Subtitle:    agent.Description,
+				Tag:         tag,
+				TagColor:    tagColor,
+				BorderColor: dimBorder,
+				Shortcut:    shortcut,
+			})
+			shortcut++
+		}
+		selectedIdx := m.agentCursor - cursorOffset
+		if selectedIdx < 0 || selectedIdx >= len(items) {
+			selectedIdx = -1 // Not in this section
+		}
+		sections = append(sections, sectionStyle.Render("Saved Agents"))
+		sections = append(sections, CardGrid(items, width, selectedIdx))
+		cursorOffset += len(items)
+	}
+
+	// Active agents section
 	if len(m.activeAgents) > 0 {
-		activeTitle := titleStyle.Render("Active Agents")
-		var activeItems []CardItem
-		for i, agent := range m.activeAgents {
+		var items []CardItem
+		for _, agent := range m.activeAgents {
 			elapsed := time.Since(agent.StartTime).Round(time.Second)
-			activeItems = append(activeItems, CardItem{
-				Title:       agent.Name,
+			items = append(items, CardItem{
+				Title:       "⚡ " + agent.Name,
 				Subtitle:    fmt.Sprintf("%s | %s | %s", agent.Provider, agent.Runtime, elapsed),
 				Tag:         "RUNNING",
 				TagColor:    lipgloss.Color("220"),
-				BorderColor: lipgloss.Color("220"),
-				Shortcut:    i + 1,
+				BorderColor: dimBorder,
+				Shortcut:    shortcut,
 			})
+			shortcut++
 		}
-		activeGrid := CardGrid(activeItems, width, -1) // No selection in active agents
-		sections = append(sections, "", activeTitle, "", activeGrid)
+		selectedIdx := m.agentCursor - cursorOffset
+		if selectedIdx < 0 || selectedIdx >= len(items) {
+			selectedIdx = -1
+		}
+		sections = append(sections, "")
+		sections = append(sections, sectionStyle.Render("Active"))
+		sections = append(sections, CardGrid(items, width, selectedIdx))
+		cursorOffset += len(items)
 	}
 
-	// Agent History section
-	historyTitle := titleStyle.Render("Agent History")
-
-	if len(m.agentHistory) == 0 {
-		emptyMsg := subtitleStyle.Render("No agent runs yet. Use Actions > Run Agent to start.")
-		sections = append(sections, "", historyTitle, "", emptyMsg)
-	} else {
-		var historyItems []CardItem
-		for i, entry := range m.agentHistory {
-			statusIcon := "+"
+	// History section
+	if len(m.agentHistory) > 0 {
+		var items []CardItem
+		for _, entry := range m.agentHistory {
+			tag := "OK"
 			tagColor := lipgloss.Color("114")
 			if !entry.Success {
-				statusIcon = "x"
+				tag = "FAIL"
 				tagColor = lipgloss.Color("196")
 			}
 
@@ -339,32 +376,24 @@ func (m model) renderAgentsTab(width, height int) string {
 			if entry.Duration > 0 {
 				subtitle += fmt.Sprintf(" | %dms", entry.Duration)
 			}
-			if entry.Runtime != "" {
-				subtitle += " | " + entry.Runtime
-			}
 
-			action := entry.Action
-			if len(action) > 40 {
-				action = action[:37] + "..."
-			}
-
-			historyItems = append(historyItems, CardItem{
+			items = append(items, CardItem{
 				Title:       entry.Agent,
 				Subtitle:    subtitle,
-				Tag:         statusIcon,
+				Tag:         tag,
 				TagColor:    tagColor,
-				BorderColor: tagColor,
-				Shortcut:    i + 1,
+				BorderColor: dimBorder,
+				Shortcut:    shortcut,
 			})
+			shortcut++
 		}
-
-		// Calculate cursor position for history (offset by active agents count)
-		historyCursor := m.agentCursor - len(m.activeAgents)
-		if historyCursor < 0 {
-			historyCursor = -1
+		selectedIdx := m.agentCursor - cursorOffset
+		if selectedIdx < 0 || selectedIdx >= len(items) {
+			selectedIdx = -1
 		}
-		historyGrid := CardGrid(historyItems, width, historyCursor)
-		sections = append(sections, "", historyTitle, "", historyGrid)
+		sections = append(sections, "")
+		sections = append(sections, sectionStyle.Render("History"))
+		sections = append(sections, CardGrid(items, width, selectedIdx))
 	}
 
 	// Info text
@@ -372,10 +401,87 @@ func (m model) renderAgentsTab(width, height int) string {
 		Foreground(subtle).
 		Italic(true)
 
-	info := infoStyle.Render("Select an entry and press Enter to view details")
-	sections = append(sections, "", info)
+	info := infoStyle.Render("Select an agent and press Enter to run/view")
 
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	content := lipgloss.JoinVertical(lipgloss.Left, append(sections, "", info)...)
+
+	return lipgloss.NewStyle().Padding(0, 2).Render(content)
+}
+
+// renderSavedAgentWizard renders the wizard for running a saved agent
+func (m model) renderSavedAgentWizard(width, height int) string {
+	wizard := m.savedAgentWizard
+	if wizard == nil || wizard.InputForm == nil {
+		return ""
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true)
+
+	title := titleStyle.Render("Run " + wizard.AgentName)
+
+	formView := wizard.InputForm.View()
+
+	wizardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99")).
+		Padding(1, 2).
+		Width(width - 10)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "", formView)
+	return lipgloss.NewStyle().Padding(1, 2).Render(wizardStyle.Render(content))
+}
+
+// renderActiveAgentDetail renders the detail view for a running agent
+func (m model) renderActiveAgentDetail(width, height int) string {
+	if m.selectedAgentIdx >= len(m.activeAgents) {
+		return ""
+	}
+
+	agent := m.activeAgents[m.selectedAgentIdx]
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true)
+
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Bold(true)
+
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
+
+	// Header
+	header := titleStyle.Render("⚡ "+agent.Name) + "  " + statusStyle.Render("● RUNNING")
+
+	// Metadata
+	elapsed := time.Since(agent.StartTime).Round(time.Second)
+	metadata := []string{
+		labelStyle.Render("ID:       ") + valueStyle.Render(agent.ID),
+		labelStyle.Render("Provider: ") + valueStyle.Render(agent.Provider),
+		labelStyle.Render("Runtime:  ") + valueStyle.Render(agent.Runtime),
+		labelStyle.Render("Started:  ") + valueStyle.Render(agent.StartTime.Format("15:04:05")),
+		labelStyle.Render("Elapsed:  ") + valueStyle.Render(elapsed.String()),
+		"",
+		labelStyle.Render("Task:"),
+		"  " + valueStyle.Render(agent.Task),
+	}
+
+	helpStyle := lipgloss.NewStyle().Foreground(subtle).Italic(true)
+	help := helpStyle.Render("Press esc to return | Agent is still running...")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		"",
+		header,
+		"",
+		lipgloss.JoinVertical(lipgloss.Left, metadata...),
+		"",
+		help,
+	)
+
 	return lipgloss.NewStyle().Padding(0, 2).Render(content)
 }
 

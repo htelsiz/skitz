@@ -106,15 +106,6 @@ func (m *model) executeInteractive(cmd command, finalCmd string) tea.Cmd {
 	})
 }
 
-// executeCommandDirect executes a command directly (used by actions)
-func executeCommandDirect(cmd string) {
-	c := newShellCommand(cmd)
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	c.Stdin = os.Stdin
-	c.Run()
-}
-
 // termStartMsg is sent when terminal is ready
 type termStartMsg struct {
 	vt      *vterm.VTerm
