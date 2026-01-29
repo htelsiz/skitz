@@ -15,17 +15,14 @@ A personal command reference TUI built with the [Charm](https://charm.sh) stack.
 
 ## Installation
 
-### Quick Install
-
 ```bash
-git clone https://github.com/htelsiz/skitz.git
-cd skitz
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/htelsiz/skitz/main/install.sh | bash
 ```
 
 ### Manual Install
 
 ```bash
+git clone https://github.com/htelsiz/skitz.git
 cd skitz
 go build -o skitz ./cmd/skitz/
 sudo mv skitz /usr/local/bin/
@@ -34,6 +31,7 @@ sudo mv skitz /usr/local/bin/
 ### Requirements
 
 - Go 1.21+
+- Git
 
 ## Quickstart
 
