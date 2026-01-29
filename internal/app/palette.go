@@ -115,6 +115,17 @@ func (m *model) buildPaletteItems() []PaletteItem {
 	})
 
 	items = append(items, PaletteItem{
+		ID:       "action:doc_verifier",
+		Icon:     "🕵️",
+		Title:    "Verify Documentation",
+		Subtitle: "Research docs and verify commands in sandbox",
+		Category: "action",
+		Handler: func(m *model) tea.Cmd {
+			return m.startVerifierWizard()
+		},
+	})
+
+	items = append(items, PaletteItem{
 		ID:       "action:create_script",
 		Icon:     "📜",
 		Title:    "Create Script",
@@ -1460,6 +1471,8 @@ func (m *model) nextWizardStep() tea.Cmd {
 		return m.nextDeployStep()
 	case "research":
 		return m.nextResearchStep()
+	case "verifier":
+		return m.nextVerifierStep()
 	}
 	return nil
 }
@@ -1930,6 +1943,11 @@ func (m *model) handleWizardSubmit() tea.Cmd {
 			}
 		case 3:
 			ws.Data["prompt"] = value
+		}
+	case "verifier":
+		switch ws.Step {
+		case 0:
+			ws.Data["topic"] = value
 		}
 	}
 
