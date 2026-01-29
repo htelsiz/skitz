@@ -89,8 +89,6 @@ mcp:
 
 ## 📝 Resources
 
-<img src="docs/commands.gif" alt="Command execution demo" width="700">
-
 Resources are markdown files in `~/.config/skitz/resources/`:
 
 ```markdown
@@ -103,13 +101,9 @@ Resources are markdown files in `~/.config/skitz/resources/`:
 - `^run` — executable command
 - `^run:varname` — prompts for `{{varname}}`
 
-<img src="docs/manage.gif" alt="Resource management demo" width="700">
-
 ---
 
 ## 🤖 AI Providers
-
-<img src="docs/ai.gif" alt="AI features demo" width="700">
 
 | Provider | Type | API Key Format |
 |----------|------|----------------|
