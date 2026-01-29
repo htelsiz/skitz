@@ -535,41 +535,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case deployWizardAccountsMsg:
-		if m.palette.WizardState != nil {
-			m.palette.WizardState.Data["accounts"] = msg.accounts
-			m.palette.WizardState.Data["accounts_loaded"] = true
-			m.palette.WizardState.Data["accounts_loading"] = false
-			m.palette.WizardState.Data["accounts_error"] = ""
-			return m, m.nextDeployStep()
-		}
-		return m, nil
-
-	case deployWizardDeploymentsMsg:
-		if m.palette.WizardState != nil {
-			m.palette.WizardState.Data["deployments"] = msg.deployments
-			m.palette.WizardState.Data["deployments_loaded"] = true
-			m.palette.WizardState.Data["deployments_loading"] = false
-			m.palette.WizardState.Data["deployments_error"] = ""
-			return m, m.nextDeployStep()
-		}
-		return m, nil
-
-	case deployWizardErrorMsg:
-		if m.palette.WizardState != nil {
-			ws := m.palette.WizardState
-			if msg.step == 0 {
-				ws.Data["accounts_error"] = msg.message
-				ws.Data["accounts_loading"] = false
-			}
-			if msg.step == 1 {
-				ws.Data["deployments_error"] = msg.message
-				ws.Data["deployments_loading"] = false
-			}
-			return m, m.nextDeployStep()
-		}
-		return m, nil
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

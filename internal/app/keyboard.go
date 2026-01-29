@@ -71,7 +71,6 @@ func (m *model) handlePaletteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.palette.State = PaletteStateSearching
 			m.palette.InputForm = nil
 			m.palette.PendingTool = nil
-			m.palette.WizardState = nil
 			return m, nil
 		}
 
@@ -80,9 +79,6 @@ func (m *model) handlePaletteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.palette.InputForm = f
 
 			if f.State == huh.StateCompleted {
-				if m.palette.WizardState != nil {
-					return m, m.handleWizardSubmit()
-				}
 				return m, m.handleParameterSubmit()
 			}
 		}
