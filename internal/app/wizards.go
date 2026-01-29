@@ -1390,11 +1390,11 @@ func (m *model) executeSavedAgent() tea.Cmd {
 	var cmd string
 	if buildPath != "" {
 		// Build image first, then run with repo mounted read-only
-		cmd = fmt.Sprintf(`docker build -t %s %s && docker run --rm --name %s -v "$(pwd):/skitz:ro" -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
+		cmd = fmt.Sprintf(`docker build -t %s %s && docker run --name %s -v "$(pwd):/skitz:ro" -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
 			image, buildPath, containerName, envVar, provider.APIKey, resource, prompt, image)
 	} else {
 		// Just run (image should exist)
-		cmd = fmt.Sprintf(`docker run --rm --name %s -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
+		cmd = fmt.Sprintf(`docker run --name %s -e %s=%s -e AGENT_RESOURCE=%q -e AGENT_PROMPT=%q %s`,
 			containerName, envVar, provider.APIKey, resource, prompt, image)
 	}
 

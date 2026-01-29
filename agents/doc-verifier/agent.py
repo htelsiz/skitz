@@ -1,141 +1,96 @@
 import asyncio
-import subprocess
 import os
 import sys
+
 from fast_agent import FastAgent
 
-fast = FastAgent("Documentation Verifier")
+agents = FastAgent(name="Resource Verification System")
 
-def list_resources() -> str:
-    """Lists all available skitz resource files.
 
-    Returns:
-        List of resource markdown files in /skitz/internal/resources/
-    """
-    try:
-        import os
-        resources_dir = "/skitz/internal/resources"
-        if not os.path.exists(resources_dir):
-            return "Resources directory not found. Ensure /skitz is mounted."
+@agents.agent(
+    name="CommandRunner",
+    instruction="""You execute shell commands to verify CLI tools exist.
 
-        files = [f for f in os.listdir(resources_dir) if f.endswith('.md')]
-        return "\n".join(sorted(files))
-    except Exception as e:
-        return f"Error listing resources: {str(e)}"
+## Tools
+- run_command(command): Execute shell commands
+- read_file(path): Read file contents  
+- setup_environment(command): Install packages (use for npm/pip installs)
 
-def read_resource(filename: str) -> str:
-    """Reads a skitz resource file.
+## Environment
+Pre-installed: uv, uvx, python, pip, node, npm, npx, git, curl, cursor, opencode
 
-    Args:
-        filename: The resource filename (e.g., 'kubectl.md')
+## Installing Tools (if needed)
+- npm tools: `npm install -g @e2b/cli` or `npx -y <pkg>`
+- Python tools: `uvx <tool>` or `uv pip install <pkg>`
 
-    Returns:
-        Contents of the resource file
-    """
-    try:
-        filepath = f"/skitz/internal/resources/{filename}"
-        with open(filepath, 'r') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error reading {filename}: {str(e)}"
+## Verification
+Only run `<tool> --help` to verify a tool exists. Do NOT run actual commands.
 
-def run_shell_command(command: str) -> str:
-    """Runs a shell command and returns the output.
-    
-    Args:
-        command: The shell command to execute.
-        
-    Returns:
-        The command output (stdout + stderr) or error message.
-    """
-    try:
-        print(f"\n[Exec] Running: {command}")
-        
-        result = subprocess.run(
-            ["sh", "-c", command],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        
-        parts = [
-            f"Exit Code: {result.returncode}",
-            "Output:",
-            result.stdout
-        ]
-        
-        if result.stderr:
-            parts.extend([
-                "STDERR:",
-                result.stderr
-            ])
-            
-        return "\n".join(parts)
-    except Exception as e:
-        return f"Error executing command: {str(e)}"
-
-@fast.agent(
-    "verifier",
-    """You are a Skitz Documentation Verifier.
-
-    ABOUT SKITZ:
-    Skitz is a terminal UI command center that provides quick access to curated documentation
-    and command references. Resources are markdown files containing organized collections of
-    commands for various tools (kubectl, docker, git, etc.).
-
-    YOUR MISSION:
-    Verify that commands in Skitz resource files work as documented - WITHOUT causing any harm.
-
-    CONTEXT:
-    - Skitz repo mounted at /skitz (read-only)
-    - Resources in /skitz/internal/resources/ (e.g., kubectl.md)
-    - AGENT_RESOURCE env var = which resource to verify
-    - AGENT_PROMPT = optional additional instructions
-
-    WORKFLOW:
-    1. Read AGENT_RESOURCE env var to get resource name
-    2. Use read_resource(name + ".md") to read the file
-    3. Extract shell commands from bash/sh code blocks
-    4. Test SAFE commands only (see safety rules below)
-    5. Report findings with clear summary
-
-    SAFETY RULES - DO NOT RUN:
-    - Destructive commands: rm, delete, drop, truncate, destroy
-    - Write operations that modify files: >, >>, tee (unless to /tmp)
-    - System modifications: apt, yum, brew install, systemctl
-    - Commands requiring credentials or network access you don't have
-    - For commands that support --dry-run, USE IT
-
-    ONLY RUN:
-    - Help/version commands: --help, --version, -h
-    - Read-only queries: get, list, describe, show, cat (on safe files)
-    - Safe demonstrations that don't modify state
-
-    WHEN YOU CAN'T TEST:
-    Mark command as "SKIPPED (unsafe/requires setup)" and note why.
-
-    START NOW - read AGENT_RESOURCE and begin verification.
-    """,
-    servers=["fetch"],
-    tools=[list_resources, read_resource, run_shell_command],
+## File Paths
+- Resources: /skitz/internal/resources/{name}.md""",
+    servers=["shell"],
+    human_input=False,
 )
-async def main():
-    # Get resource and prompt from environment
+@agents.agent(
+    name="DocumentationResearcher",
+    instruction="""Verify commands exist in official documentation.
+
+Use the fetch tool to check if a command is documented at the official docs URL.
+
+Common docs:
+- e2b: https://e2b.dev/docs/cli
+- docker: https://docs.docker.com/reference/cli/docker/
+- gcloud: https://cloud.google.com/sdk/gcloud/reference
+- az: https://learn.microsoft.com/en-us/cli/azure/reference-index
+- git: https://git-scm.com/docs
+
+Report: FOUND or NOT FOUND for each command checked.""",
+    servers=["fetch"],
+    human_input=False,
+)
+@agents.orchestrator(
+    name="ResourceVerificationOrchestrator",
+    instruction="""Verify CLI commands documented in a Skitz resource file.
+
+## Agents
+- **CommandRunner**: Reads files, runs `--help` commands
+- **DocumentationResearcher**: Checks official docs when needed
+
+## Workflow
+
+1. Ask CommandRunner to read `/skitz/internal/resources/{resource}.md`
+2. Ask CommandRunner to run `<tool> --help` to verify the CLI exists (install first if needed)
+3. Compare documented commands against --help output
+4. For any command NOT in --help, ask DocumentationResearcher to verify against official docs
+
+## Report Format
+```
+Resource: {name}
+Tool: {tool}
+
+Verified (in --help): [list]
+Not in --help but documented online: [list]  
+Undocumented: [list]
+```
+
+Keep it simple - only verify existence, don't test commands.""",
+    agents=["CommandRunner", "DocumentationResearcher"],
+)
+async def main() -> None:
     resource = os.environ.get("AGENT_RESOURCE", "")
-    prompt = os.environ.get("AGENT_PROMPT", "")
+    print(f"[DEBUG] AGENT_RESOURCE={resource}")
 
     if not resource:
         print("Error: AGENT_RESOURCE not set. Specify which resource to verify.")
         sys.exit(1)
 
-    # Build initial message
-    initial_message = f"Verify the {resource} resource."
-    if prompt:
-        initial_message += f" {prompt}"
-
-    async with fast.run() as agent:
-        result = await agent.verifier.send(initial_message)
+    async with agents.run() as agent:
+        print("[DEBUG] Starting verification...")
+        result = await agent.ResourceVerificationOrchestrator.send(
+            f"Verify the CLI commands documented in the resource file: {resource}"
+        )
         print(result)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

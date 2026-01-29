@@ -1,11 +1,16 @@
-# Fast-Agent Verifier Configuration
 default_model: gpt-5.2
 
 logger:
+  type: console
+  level: info
   progress_display: true
 
 mcp:
   servers:
+    shell:
+      command: "python"
+      args: ["/app/shell_server.py"]
+
     fetch:
-      command: uvx
+      command: "uvx"
       args: ["mcp-server-fetch"]
