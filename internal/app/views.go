@@ -263,45 +263,18 @@ func (m model) renderActionsTab(width, height int) string {
 		Foreground(secondary).
 		Bold(true)
 
-	var actionCards []string
-
+	// Convert action items to CardItems
+	var items []CardItem
 	for i, action := range m.actionItems {
-		isSelected := i == m.actionCursor
-
-		// Build card content
-		iconStyle := lipgloss.NewStyle().Foreground(primary).Bold(true)
-		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(white)
-		descStyle := lipgloss.NewStyle().Foreground(subtle)
-		shortcutStyle := lipgloss.NewStyle().Foreground(subtle)
-
-		cardContent := lipgloss.JoinVertical(lipgloss.Left,
-			iconStyle.Render(action.Icon)+"  "+nameStyle.Render(action.Name),
-			descStyle.Render(action.Description),
-			"",
-			shortcutStyle.Render(fmt.Sprintf("[%d] to select", i+1)),
-		)
-
-		// Card styling based on selection
-		var cardStyle lipgloss.Style
-		if isSelected {
-			cardStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(primary).
-				Padding(1, 2).
-				Width(width/3 - 4)
-		} else {
-			cardStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(dimBorder).
-				Padding(1, 2).
-				Width(width/3 - 4)
-		}
-
-		actionCards = append(actionCards, cardStyle.Render(cardContent))
+		items = append(items, CardItem{
+			Title:    action.Icon + "  " + action.Name,
+			Subtitle: action.Description,
+			TagColor: primary,
+			Shortcut: i + 1,
+		})
 	}
 
-	// Join cards horizontally
-	cardsRow := lipgloss.JoinHorizontal(lipgloss.Top, actionCards...)
+	cardGrid := CardGrid(items, width, m.actionCursor)
 
 	// Info text
 	infoStyle := lipgloss.NewStyle().
@@ -314,7 +287,7 @@ func (m model) renderActionsTab(width, height int) string {
 		"",
 		titleStyle.Render("Available Actions"),
 		"",
-		cardsRow,
+		cardGrid,
 		"",
 		info,
 	)
@@ -651,86 +624,25 @@ func (m model) renderDashboard() string {
 		bottomBorder,
 	)
 
-	cardW := (mainAreaW - 6) / 3
-	if cardW < 25 {
-		cardW = (mainAreaW - 4) / 2
-	}
-	if cardW < 25 {
-		cardW = mainAreaW - 4
-	}
-
-	var cards []string
+	// Convert resources to CardItems
+	var resourceItems []CardItem
 	for i, res := range m.resources {
 		meta := toolMetadata[res.name]
-		isSelected := i == m.resCursor
-
-		shortcut := lipgloss.NewStyle().
-			Foreground(subtle).
-			Render(fmt.Sprintf("[%d]", i+1))
-
-		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(meta.color)
+		borderColor := dimBorder
 		if meta.status == "coming_soon" {
-			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(subtle)
+			borderColor = lipgloss.Color("238")
 		}
-		toolName := nameStyle.Render(strings.ToUpper(res.name))
-
-		descCardStyle := lipgloss.NewStyle().Foreground(subtle)
-		if meta.status == "coming_soon" {
-			descCardStyle = descCardStyle.Italic(true)
-		}
-		description := descCardStyle.Render(res.description)
-
-		categoryStyle := lipgloss.NewStyle().
-			Foreground(meta.color).
-			Background(lipgloss.Color("236")).
-			Padding(0, 1)
-		categoryTag := categoryStyle.Render(meta.category)
-
-		cardContent := lipgloss.JoinVertical(lipgloss.Left,
-			toolName+"  "+shortcut,
-			description,
-			"",
-			categoryTag,
-		)
-
-		var cardBorderStyle lipgloss.Style
-		if meta.status == "coming_soon" {
-			cardBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("238")).
-				Padding(1, 1)
-		} else if isSelected {
-			cardBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(meta.color).
-				Padding(1, 1)
-		} else {
-			cardBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(dimBorder).
-				Padding(1, 1)
-		}
-
-		card := cardBorderStyle.Width(cardW - 2).Render(cardContent)
-		cards = append(cards, card)
+		resourceItems = append(resourceItems, CardItem{
+			Title:       strings.ToUpper(res.name),
+			Subtitle:    res.description,
+			Tag:         meta.category,
+			TagColor:    meta.color,
+			BorderColor: borderColor,
+			Shortcut:    i + 1,
+		})
 	}
 
-	cardsPerRow := mainAreaW / cardW
-	if cardsPerRow < 1 {
-		cardsPerRow = 1
-	}
-
-	var rows []string
-	for i := 0; i < len(cards); i += cardsPerRow {
-		end := i + cardsPerRow
-		if end > len(cards) {
-			end = len(cards)
-		}
-		row := lipgloss.JoinHorizontal(lipgloss.Top, cards[i:end]...)
-		rows = append(rows, row)
-	}
-
-	cardGrid := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	cardGrid := CardGrid(resourceItems, mainAreaW, m.resCursor)
 
 	// Render tab bar
 	tabBar := m.renderDashboardTabs(mainAreaW)

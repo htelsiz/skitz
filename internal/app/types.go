@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -232,6 +233,105 @@ func parseCommands(content string) []command {
 	}
 
 	return commands
+}
+
+// CardItem represents a single card in a CardGrid
+type CardItem struct {
+	Title       string
+	Subtitle    string
+	Tag         string
+	TagColor    lipgloss.Color
+	BorderColor lipgloss.Color
+	Shortcut    int // 1-based index for [N] display
+}
+
+// CardGrid renders a responsive grid of cards
+func CardGrid(items []CardItem, width int, selectedIdx int) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	// Calculate card width (same logic as resources tab)
+	cardW := (width - 6) / 3
+	if cardW < 25 {
+		cardW = (width - 4) / 2
+	}
+	if cardW < 25 {
+		cardW = width - 4
+	}
+
+	var cards []string
+	for i, item := range items {
+		isSelected := i == selectedIdx
+
+		shortcut := lipgloss.NewStyle().
+			Foreground(subtle).
+			Render(fmt.Sprintf("[%d]", item.Shortcut))
+
+		titleColor := item.TagColor
+		if titleColor == "" {
+			titleColor = white
+		}
+		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleColor)
+		descStyle := lipgloss.NewStyle().Foreground(subtle)
+
+		var cardContent string
+		if item.Tag != "" {
+			tagStyle := lipgloss.NewStyle().
+				Foreground(item.TagColor).
+				Background(lipgloss.Color("236")).
+				Padding(0, 1)
+			cardContent = lipgloss.JoinVertical(lipgloss.Left,
+				titleStyle.Render(item.Title)+"  "+shortcut,
+				descStyle.Render(item.Subtitle),
+				"",
+				tagStyle.Render(item.Tag),
+			)
+		} else {
+			cardContent = lipgloss.JoinVertical(lipgloss.Left,
+				titleStyle.Render(item.Title)+"  "+shortcut,
+				descStyle.Render(item.Subtitle),
+			)
+		}
+
+		borderColor := item.BorderColor
+		if borderColor == "" {
+			borderColor = dimBorder
+		}
+		if isSelected {
+			if item.TagColor != "" {
+				borderColor = item.TagColor
+			} else {
+				borderColor = primary
+			}
+		}
+
+		cardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Padding(1, 1).
+			Width(cardW - 2)
+
+		cards = append(cards, cardStyle.Render(cardContent))
+	}
+
+	// Arrange in rows
+	cardsPerRow := width / cardW
+	if cardsPerRow < 1 {
+		cardsPerRow = 1
+	}
+
+	var rows []string
+	for i := 0; i < len(cards); i += cardsPerRow {
+		end := i + cardsPerRow
+		if end > len(cards) {
+			end = len(cards)
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, cards[i:end]...)
+		rows = append(rows, row)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 // highlightShellCommand applies syntax highlighting to shell commands

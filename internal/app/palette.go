@@ -104,6 +104,17 @@ func (m *model) buildPaletteItems() []PaletteItem {
 	})
 
 	items = append(items, PaletteItem{
+		ID:       "action:cloud_agent",
+		Icon:     "☁️",
+		Title:    "Cloud Agent Action",
+		Subtitle: "Run agents on Azure, AWS, or GCP",
+		Category: "action",
+		Handler: func(m *model) tea.Cmd {
+			return m.startCloudAgentWizard()
+		},
+	})
+
+	items = append(items, PaletteItem{
 		ID:       "action:create_script",
 		Icon:     "📜",
 		Title:    "Create Script",
@@ -1447,6 +1458,8 @@ func (m *model) nextWizardStep() tea.Cmd {
 		return m.nextBIAStep()
 	case "deploy":
 		return m.nextDeployStep()
+	case "cloud_agent":
+		return m.nextCloudAgentStep()
 	}
 	return nil
 }
@@ -1918,6 +1931,8 @@ func (m *model) handleWizardSubmit() tea.Cmd {
 		case 3:
 			ws.Data["prompt"] = value
 		}
+	case "cloud_agent":
+		return m.handleCloudAgentWizardSubmit()
 	}
 
 	if advanceStep {

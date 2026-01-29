@@ -196,6 +196,16 @@ func (m *model) buildDashboardActions() []DashboardAction {
 			},
 		},
 		{
+			ID:          "cloud_agent",
+			Name:        "Cloud Agent Action",
+			Icon:        "☁",
+			Description: "Run agents on Azure, AWS, or GCP",
+			Handler: func(m *model) tea.Cmd {
+				m.openPalette()
+				return m.startCloudAgentWizard()
+			},
+		},
+		{
 			ID:          "providers",
 			Name:        "Configure Providers",
 			Icon:        "◈",
@@ -1715,6 +1725,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.palette.State = PaletteStateShowingResult
 		m.palette.ResultTitle = msg.title
 		m.palette.ResultText = msg.output
+		return m, nil
+
+	case cloudAgentResultMsg:
+		m.palette.State = PaletteStateShowingResult
+		m.palette.ResultTitle = msg.title
+		m.palette.ResultText = msg.output
+		m.palette.WizardState = nil
 		return m, nil
 
 	case aiPrefilledParamsMsg:
