@@ -27,6 +27,7 @@ func (m *model) loadResources() {
 		"cursor":     "AI-powered code editor",
 		"fast-agent": "MCP-native AI agent framework",
 		"e2b":        "Cloud sandbox for AI agents",
+		"gcp":        "Google Cloud CLI commands",
 		"codex":      "OpenAI CLI coding agent",
 	}
 
