@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,6 +81,7 @@ type EmbeddedTerm struct {
 	height  int
 	exitErr error
 	exited  bool
+	command string // The command that was executed
 	// Static output mode (for MCP tools, etc.)
 	staticOutput string
 	staticTitle  string
@@ -150,12 +152,13 @@ func (m *model) loadResources() {
 	seen := make(map[string]bool)
 
 	descriptions := map[string]string{
-		"claude": "AI coding assistant CLI",
-		"docker": "Container management",
-		"git":    "Version control & GitHub CLI",
-		"mcp":    "Model Context Protocol",
-		"azure":  "Cloud resource management",
-		"cursor": "AI-powered code editor",
+		"claude":     "AI coding assistant CLI",
+		"docker":     "Container management",
+		"git":        "Version control & GitHub CLI",
+		"mcp":        "Model Context Protocol",
+		"azure":      "Cloud resource management",
+		"cursor":     "AI-powered code editor",
+		"fast-agent": "MCP-native AI agent framework",
 	}
 
 	// 1. Read user resources from ~/.config/skitz/resources/ (override embedded)
@@ -237,6 +240,30 @@ func (m *model) loadResources() {
 					title:   "Commands",
 					content: string(content),
 				})
+
+				// Load embedded detail sections
+				detailName := resName + "-detail.md"
+				if detailContent, err := resources.Default.ReadFile(detailName); err == nil {
+					var cur *section
+					var buf strings.Builder
+					for _, line := range strings.Split(string(detailContent), "\n") {
+						if strings.HasPrefix(line, "## ") {
+							if cur != nil {
+								cur.content = buf.String()
+								res.sections = append(res.sections, *cur)
+							}
+							cur = &section{title: strings.TrimPrefix(line, "## ")}
+							buf.Reset()
+							buf.WriteString(line + "\n")
+						} else if cur != nil {
+							buf.WriteString(line + "\n")
+						}
+					}
+					if cur != nil {
+						cur.content = buf.String()
+						res.sections = append(res.sections, *cur)
+					}
+				}
 
 				m.resources = append(m.resources, res)
 				seen[resName] = true
@@ -418,9 +445,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pty:     msg.pty,
 			width:   msg.width,
 			height:  msg.height,
+			command: msg.command,
 		}
 
 		go func() {
+			// Redirect vterm debug logs to file instead of stdout
+			logPath := filepath.Join(config.DataDir, "terminal.log")
+			os.MkdirAll(config.DataDir, 0755)
+			if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+				log.SetOutput(logFile)
+				defer logFile.Close()
+				defer log.SetOutput(os.Stderr)
+			}
 			reader := bufio.NewReader(msg.pty)
 			msg.vt.ProcessStdout(reader)
 		}()

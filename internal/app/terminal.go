@@ -76,32 +76,47 @@ func (m model) renderTerminalPane() string {
 		return ""
 	}
 
-	// Status indicator
-	var statusText string
+	// Status bar
+	baseBg := lipgloss.Color("236")
+	keyStyle := lipgloss.NewStyle().Background(baseBg).Foreground(lipgloss.Color("245"))
+	textStyle := lipgloss.NewStyle().Background(baseBg).Foreground(lipgloss.Color("252")).Padding(0, 1)
+
+	var statusParts []string
+
 	if m.term.staticOutput != "" {
 		title := m.term.staticTitle
 		if title == "" {
 			title = "Output"
 		}
-		statusText = title + " | ESC: close"
+		statusParts = append(statusParts, textStyle.Render(title))
 	} else if m.term.exited {
 		if m.term.exitErr != nil {
-			statusText = fmt.Sprintf("Exited with error: %v | ESC: close", m.term.exitErr)
+			statusParts = append(statusParts, textStyle.Copy().Background(lipgloss.Color("52")).Render("✗ Failed"))
 		} else {
-			statusText = "Process exited | ESC: close"
+			statusParts = append(statusParts, textStyle.Copy().Background(lipgloss.Color("22")).Render("✓ Complete"))
+		}
+		if m.term.command != "" {
+			statusParts = append(statusParts, textStyle.Copy().Foreground(lipgloss.Color("245")).Render(m.term.command))
 		}
 	} else if m.term.focused {
-		statusText = "Terminal focused | F1: return to skitz"
+		statusParts = append(statusParts, textStyle.Render("Terminal focused"))
 	} else {
-		statusText = "F1: toggle focus"
+		statusParts = append(statusParts, textStyle.Render("Running"))
+		if m.term.command != "" {
+			statusParts = append(statusParts, textStyle.Copy().Foreground(lipgloss.Color("245")).Render(m.term.command))
+		}
 	}
 
-	statusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 1)
+	// Add key hints
+	if m.term.exited || m.term.staticOutput != "" {
+		statusParts = append(statusParts, keyStyle.Render("esc")+" "+textStyle.Render("close"))
+	} else if m.term.focused {
+		statusParts = append(statusParts, keyStyle.Render("F1")+" "+textStyle.Render("return"))
+	} else {
+		statusParts = append(statusParts, keyStyle.Render("F1")+" "+textStyle.Render("focus"))
+	}
 
-	status := statusStyle.Render(statusText)
+	status := lipgloss.JoinHorizontal(lipgloss.Center, statusParts...)
 
 	// Build the terminal pane with border
 	termStyle := lipgloss.NewStyle().

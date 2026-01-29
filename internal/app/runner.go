@@ -117,11 +117,12 @@ func executeCommandDirect(cmd string) {
 
 // termStartMsg is sent when terminal is ready
 type termStartMsg struct {
-	vt     *vterm.VTerm
-	pty    *os.File
-	cmd    *exec.Cmd
-	width  int
-	height int
+	vt      *vterm.VTerm
+	pty     *os.File
+	cmd     *exec.Cmd
+	width   int
+	height  int
+	command string // The command string that was executed
 }
 
 // executeEmbedded runs a command in an embedded terminal pane
@@ -160,11 +161,12 @@ func (m *model) executeEmbedded(cmdStr string) tea.Cmd {
 		vt.Reshape(0, 0, termW, termH)
 
 		return termStartMsg{
-			vt:     vt,
-			pty:    ptmx,
-			cmd:    c,
-			width:  termW,
-			height: termH,
+			vt:      vt,
+			pty:     ptmx,
+			cmd:     c,
+			width:   termW,
+			height:  termH,
+			command: cmdStr,
 		}
 	}
 }

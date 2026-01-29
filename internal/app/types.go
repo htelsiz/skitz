@@ -76,11 +76,11 @@ var toolMetadata = map[string]toolMeta{
 │ ▶ │
 ╰───╯`,
 		color:       lipgloss.Color("51"),
-		category:    "AI Editor",
+		category:    "AI Agent",
 		status:      "active",
-		cmdCount:    28,
+		cmdCount:    15,
 		lastUsed:    "",
-		topCommands: []string{"⌘ L", "⌘ K", "⌘ I"},
+		topCommands: []string{"cursor", "cursor ls", "cursor mcp list"},
 	},
 	"docker": {
 		icon: "▣",
@@ -117,6 +117,18 @@ var toolMetadata = map[string]toolMeta{
 		cmdCount:    12,
 		lastUsed:    "1h ago",
 		topCommands: []string{"mcp list", "mcp connect", "mcp inspect"},
+	},
+	"fast-agent": {
+		icon: "⚡",
+		asciiArt: `╭───╮
+│ ⚡ │
+╰───╯`,
+		color:       lipgloss.Color("220"),
+		category:    "AI Agent",
+		status:      "active",
+		cmdCount:    6,
+		lastUsed:    "",
+		topCommands: []string{"fast-agent run", "fast-agent chat", "fast-agent init"},
 	},
 }
 
