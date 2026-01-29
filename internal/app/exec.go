@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -36,13 +37,18 @@ func newShellCommand(command string) *exec.Cmd {
 
 func (m *model) runCommand(spec CommandSpec) tea.Cmd {
 	if strings.TrimSpace(spec.Command) == "" {
+		log.Println("runCommand: empty command")
 		return nil
 	}
 
+	log.Printf("runCommand: mode=%s cmd=%s", spec.Mode, spec.Command)
+
 	switch spec.Mode {
 	case CommandInteractive:
+		log.Println("runCommand: using interactive mode")
 		return m.executeInteractive(command{cmd: spec.Command}, spec.Command)
 	default:
+		log.Println("runCommand: using embedded mode")
 		return m.executeEmbedded(spec.Command)
 	}
 }

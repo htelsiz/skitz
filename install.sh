@@ -42,7 +42,7 @@ cd "$TEMP_DIR"
 
 # Build
 echo "Building..."
-go build -o skitz ./cmd/skitz/
+go build -o skitz .
 
 # Install
 echo "Installing to $INSTALL_DIR..."

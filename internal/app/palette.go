@@ -82,6 +82,17 @@ func (m *model) buildPaletteItems() []PaletteItem {
 	var items []PaletteItem
 
 	items = append(items, PaletteItem{
+		ID:       "action:deep_research",
+		Icon:     "🔬",
+		Title:    "Deep Research",
+		Subtitle: "Research any topic with Fast-Agent",
+		Category: "action",
+		Handler: func(m *model) tea.Cmd {
+			return m.startResearchWizard()
+		},
+	})
+
+	items = append(items, PaletteItem{
 		ID:       "action:bia_review",
 		Icon:     "🔍",
 		Title:    "BIA Code Review",
@@ -1447,6 +1458,8 @@ func (m *model) nextWizardStep() tea.Cmd {
 		return m.nextBIAStep()
 	case "deploy":
 		return m.nextDeployStep()
+	case "research":
+		return m.nextResearchStep()
 	}
 	return nil
 }
