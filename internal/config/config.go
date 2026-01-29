@@ -71,7 +71,8 @@ type AIConfig struct {
 }
 
 type ProviderConfig struct {
-	Name         string `yaml:"name"`          // e.g., "openai", "anthropic", "ollama"
+	Name         string `yaml:"name"`
+	ProviderType string `yaml:"provider_type,omitempty"` // "openai", "anthropic", "ollama", "openai-compatible"
 	APIKey       string `yaml:"api_key,omitempty"`
 	BaseURL      string `yaml:"base_url,omitempty"` // for custom endpoints
 	DefaultModel string `yaml:"default_model,omitempty"`

@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	overlay "github.com/rmhubbert/bubbletea-overlay"
 
+	"github.com/htelsiz/skitz/internal/ai"
 	"github.com/htelsiz/skitz/internal/config"
 	mcppkg "github.com/htelsiz/skitz/internal/mcp"
 	"github.com/htelsiz/skitz/internal/resources"
@@ -41,11 +42,12 @@ type model struct {
 	dashboardTab         int                // 0=Resources, 1=Actions
 	actionItems          []DashboardAction  // Available actions
 	actionCursor         int                // Selected action
-	addResourceWizard    *AddResourceWizard  // Add Resource wizard state
-	preferencesWizard    *PreferencesWizard  // Preferences wizard state
-	providersWizard      *ProvidersWizard    // Configure Providers wizard state
-	pendingResourceReload bool               // Reload resources after editor closes
-	pendingConfigReload   bool               // Reload config after editor closes
+	addResourceWizard    *AddResourceWizard    // Add Resource wizard state
+	preferencesWizard    *PreferencesWizard    // Preferences wizard state
+	providersWizard      *ProvidersWizard      // Configure Providers wizard state
+	deleteResourceWizard *DeleteResourceWizard // Delete Resource confirmation state
+	pendingResourceReload bool                 // Reload resources after editor closes
+	pendingConfigReload   bool                 // Reload config after editor closes
 
 	// View components (bubbles)
 	contentView viewport.Model
@@ -81,6 +83,19 @@ type model struct {
 
 	// Embedded terminal
 	term EmbeddedTerm
+
+	// AI Ask panel state
+	askPanel *AskPanel
+}
+
+// AskPanel holds state for the AI ask feature
+type AskPanel struct {
+	Active      bool
+	Input       string
+	Response    string
+	Loading     bool
+	Error       string
+	GeneratedCmd string // If AI generated a runnable command
 }
 
 // EmbeddedTerm holds the state for the embedded terminal pane
@@ -115,6 +130,13 @@ type termExitMsg struct{ err error }
 type staticOutputMsg struct {
 	title  string
 	output string
+}
+
+// aiResponseMsg is sent when AI finishes responding
+type aiResponseMsg struct {
+	response     string
+	generatedCmd string
+	err          error
 }
 
 // agentInteractionMsg is sent when an agent interaction completes
@@ -567,7 +589,11 @@ func (m *model) buildProvidersForm() tea.Cmd {
 			if p.Name == m.config.AI.DefaultProvider {
 				status = "default"
 			}
-			options = append(options, huh.NewOption(fmt.Sprintf("Edit: %s (%s)", p.Name, status), "edit:"+p.Name))
+			provType := p.ProviderType
+			if provType == "" {
+				provType = ai.DetectProviderType(p.APIKey, p.BaseURL, p.Name)
+			}
+			options = append(options, huh.NewOption(fmt.Sprintf("Edit: %s [%s] (%s)", p.Name, provType, status), "edit:"+p.Name))
 			options = append(options, huh.NewOption(fmt.Sprintf("Remove: %s", p.Name), "remove:"+p.Name))
 		}
 
@@ -589,15 +615,20 @@ func (m *model) buildProvidersForm() tea.Cmd {
 			WithTheme(huh.ThemeCatppuccin())
 		return wizard.InputForm.Init()
 
-	case 1: // Provider type selection (for new provider)
+	case 1: // Provider type selection
+		// Set current value based on detection if editing
+		if wizard.ProviderType == "" && wizard.APIKey != "" {
+			wizard.ProviderType = ai.DetectProviderType(wizard.APIKey, wizard.BaseURL, wizard.Name)
+		}
+
 		wizard.InputForm = huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("Provider Type").
-					Description("Select the LLM provider").
+					Description("Select the LLM provider API type").
 					Options(
 						huh.NewOption("OpenAI", "openai"),
-						huh.NewOption("Anthropic", "anthropic"),
+						huh.NewOption("Anthropic (Claude)", "anthropic"),
 						huh.NewOption("Ollama (Local)", "ollama"),
 						huh.NewOption("OpenAI Compatible", "openai-compatible"),
 					).
@@ -622,10 +653,16 @@ func (m *model) buildProvidersForm() tea.Cmd {
 
 		// API key for cloud providers
 		if wizard.ProviderType != "ollama" {
+			keyDesc := "Your API key (stored locally)"
+			if wizard.ProviderType == "anthropic" {
+				keyDesc = "Anthropic API key (starts with sk-ant-)"
+			} else if wizard.ProviderType == "openai" {
+				keyDesc = "OpenAI API key (starts with sk-)"
+			}
 			fields = append(fields,
 				huh.NewInput().
 					Title("API Key").
-					Description("Your API key (stored locally)").
+					Description(keyDesc).
 					EchoMode(huh.EchoModePassword).
 					Value(&wizard.APIKey),
 			)
@@ -675,7 +712,12 @@ func (m *model) buildProvidersForm() tea.Cmd {
 			WithTheme(huh.ThemeCatppuccin())
 		return wizard.InputForm.Init()
 
-	case 3: // Set default provider
+	case 3: // Test connection - this is handled in view, no form needed
+		wizard.InputForm = nil
+		wizard.Testing = true
+		return m.testProviderConnection()
+
+	case 4: // Set default provider
 		var options []huh.Option[string]
 		for _, p := range m.config.AI.Providers {
 			if p.Enabled {
@@ -710,6 +752,39 @@ func (m *model) buildProvidersForm() tea.Cmd {
 	return nil
 }
 
+// providerTestMsg is sent when provider test completes
+type providerTestMsg struct {
+	success bool
+	err     error
+}
+
+// testProviderConnection tests the configured provider
+func (m *model) testProviderConnection() tea.Cmd {
+	wizard := m.providersWizard
+	if wizard == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		provider := config.ProviderConfig{
+			Name:         wizard.Name,
+			ProviderType: wizard.ProviderType,
+			APIKey:       wizard.APIKey,
+			BaseURL:      wizard.BaseURL,
+			DefaultModel: wizard.DefaultModel,
+			Enabled:      true,
+		}
+
+		client := ai.NewClient(provider)
+		err := client.TestConnection()
+
+		return providerTestMsg{
+			success: err == nil,
+			err:     err,
+		}
+	}
+}
+
 // nextProvidersStep advances the providers wizard
 func (m *model) nextProvidersStep() tea.Cmd {
 	wizard := m.providersWizard
@@ -723,7 +798,7 @@ func (m *model) nextProvidersStep() tea.Cmd {
 			wizard.Step = 1
 			return m.buildProvidersForm()
 		} else if wizard.Action == "default" {
-			wizard.Step = 3
+			wizard.Step = 4
 			return m.buildProvidersForm()
 		} else if strings.HasPrefix(wizard.Action, "edit:") {
 			// Load existing provider data
@@ -735,19 +810,14 @@ func (m *model) nextProvidersStep() tea.Cmd {
 					wizard.BaseURL = p.BaseURL
 					wizard.DefaultModel = p.DefaultModel
 					wizard.Enabled = p.Enabled
-					// Determine provider type from existing data
-					wizard.ProviderType = "openai-compatible"
-					if strings.Contains(strings.ToLower(p.Name), "openai") || p.BaseURL == "" {
-						wizard.ProviderType = "openai"
-					} else if strings.Contains(strings.ToLower(p.Name), "anthropic") {
-						wizard.ProviderType = "anthropic"
-					} else if strings.Contains(strings.ToLower(p.Name), "ollama") || strings.Contains(p.BaseURL, "11434") {
-						wizard.ProviderType = "ollama"
+					wizard.ProviderType = p.ProviderType
+					if wizard.ProviderType == "" {
+						wizard.ProviderType = ai.DetectProviderType(p.APIKey, p.BaseURL, p.Name)
 					}
 					break
 				}
 			}
-			wizard.Step = 2
+			wizard.Step = 1 // Go to type selection so they can change it
 			return m.buildProvidersForm()
 		} else if strings.HasPrefix(wizard.Action, "remove:") {
 			providerName := strings.TrimPrefix(wizard.Action, "remove:")
@@ -776,6 +846,9 @@ func (m *model) nextProvidersStep() tea.Cmd {
 			if wizard.BaseURL == "" {
 				wizard.BaseURL = "http://localhost:11434"
 			}
+			if wizard.DefaultModel == "" {
+				wizard.DefaultModel = "llama3"
+			}
 		case "anthropic":
 			if wizard.DefaultModel == "" {
 				wizard.DefaultModel = "claude-sonnet-4-20250514"
@@ -788,46 +861,30 @@ func (m *model) nextProvidersStep() tea.Cmd {
 		wizard.Step = 2
 		return m.buildProvidersForm()
 
-	case 2: // After provider details form
+	case 2: // After provider details form - go to test
 		if wizard.Name == "" {
 			wizard.Name = wizard.ProviderType
 		}
 
-		newProvider := config.ProviderConfig{
-			Name:         wizard.Name,
-			APIKey:       wizard.APIKey,
-			BaseURL:      wizard.BaseURL,
-			DefaultModel: wizard.DefaultModel,
-			Enabled:      wizard.Enabled,
+		// Validate API key format
+		if wizard.ProviderType == "anthropic" && wizard.APIKey != "" && !strings.HasPrefix(wizard.APIKey, "sk-ant-") {
+			return m.showNotification("!", "Anthropic keys start with sk-ant-", "warning")
+		}
+		if wizard.ProviderType == "openai" && wizard.APIKey != "" && !strings.HasPrefix(wizard.APIKey, "sk-") {
+			return m.showNotification("!", "OpenAI keys start with sk-", "warning")
 		}
 
-		// Check if editing existing or adding new
-		found := false
-		if strings.HasPrefix(wizard.Action, "edit:") {
-			oldName := strings.TrimPrefix(wizard.Action, "edit:")
-			for i, p := range m.config.AI.Providers {
-				if p.Name == oldName {
-					m.config.AI.Providers[i] = newProvider
-					found = true
-					break
-				}
-			}
-		}
+		wizard.Step = 3
+		wizard.Testing = true
+		wizard.TestResult = ""
+		wizard.TestError = ""
+		return m.buildProvidersForm()
 
-		if !found {
-			m.config.AI.Providers = append(m.config.AI.Providers, newProvider)
-		}
+	case 3: // After test - save if successful (handled by providerTestMsg)
+		// This case is handled by the providerTestMsg handler
+		return nil
 
-		// Set as default if it's the first provider
-		if len(m.config.AI.Providers) == 1 && newProvider.Enabled {
-			m.config.AI.DefaultProvider = newProvider.Name
-		}
-
-		config.Save(m.config)
-		m.providersWizard = nil
-		return m.showNotification("✓", "Provider saved: "+wizard.Name, "success")
-
-	case 3: // After default provider selection
+	case 4: // After default provider selection
 		m.config.AI.DefaultProvider = wizard.Name
 		config.Save(m.config)
 		m.providersWizard = nil
@@ -838,12 +895,304 @@ func (m *model) nextProvidersStep() tea.Cmd {
 	return nil
 }
 
+// submitAskPanel sends the question to the AI
+func (m *model) submitAskPanel() tea.Cmd {
+	if m.askPanel == nil || m.askPanel.Input == "" {
+		return nil
+	}
+
+	m.askPanel.Loading = true
+	m.askPanel.Response = ""
+	m.askPanel.Error = ""
+	m.askPanel.GeneratedCmd = ""
+
+	question := m.askPanel.Input
+	context := ""
+	if res := m.currentResource(); res != nil {
+		context = res.content
+	}
+
+	return func() tea.Msg {
+		client, err := ai.GetDefaultClient(m.config)
+		if err != nil {
+			return aiResponseMsg{err: err}
+		}
+
+		resp := client.Ask(question, context)
+		if resp.Error != nil {
+			return aiResponseMsg{err: resp.Error}
+		}
+
+		// Check if response contains a command suggestion
+		var generatedCmd string
+		lines := strings.Split(resp.Content, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "$ ") {
+				generatedCmd = strings.TrimPrefix(line, "$ ")
+				break
+			}
+		}
+
+		return aiResponseMsg{
+			response:     resp.Content,
+			generatedCmd: generatedCmd,
+		}
+	}
+}
+
+// submitGenerateCommand asks AI to generate a specific command
+func (m *model) submitGenerateCommand() tea.Cmd {
+	if m.askPanel == nil || m.askPanel.Input == "" {
+		return nil
+	}
+
+	m.askPanel.Loading = true
+	m.askPanel.Response = ""
+	m.askPanel.Error = ""
+	m.askPanel.GeneratedCmd = ""
+
+	description := m.askPanel.Input
+	context := ""
+	if res := m.currentResource(); res != nil {
+		// Extract just the commands for context
+		for _, cmd := range m.commands {
+			context += cmd.raw + "\n"
+		}
+	}
+
+	return func() tea.Msg {
+		client, err := ai.GetDefaultClient(m.config)
+		if err != nil {
+			return aiResponseMsg{err: err}
+		}
+
+		resp := client.GenerateCommand(description, context)
+		if resp.Error != nil {
+			return aiResponseMsg{err: resp.Error}
+		}
+
+		content := strings.TrimSpace(resp.Content)
+		if strings.HasPrefix(content, "ERROR:") {
+			return aiResponseMsg{
+				response: content,
+			}
+		}
+
+		return aiResponseMsg{
+			response:     "Generated command:",
+			generatedCmd: content,
+		}
+	}
+}
+
+// addCommandToResource adds a generated command to the current resource
+func (m *model) addCommandToResource(cmd string) tea.Cmd {
+	res := m.currentResource()
+	if res == nil {
+		return m.showNotification("!", "No resource selected", "error")
+	}
+
+	// Ensure user resources directory exists
+	if err := os.MkdirAll(config.ResourcesDir, 0755); err != nil {
+		return m.showNotification("!", "Failed to create directory: "+err.Error(), "error")
+	}
+
+	filePath := filepath.Join(config.ResourcesDir, res.name+".md")
+
+	// If resource is embedded, copy it first
+	var content string
+	if res.embedded {
+		content = res.content
+	} else {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			content = res.content
+		} else {
+			content = string(data)
+		}
+	}
+
+	// Add the new command
+	newLine := fmt.Sprintf("\n`%s` AI generated ^run\n", cmd)
+	content += newLine
+
+	// Write file
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return m.showNotification("!", "Failed to save: "+err.Error(), "error")
+	}
+
+	// Reload resources
+	m.loadResources()
+	m.askPanel = nil
+
+	// Re-init view to show new command
+	m.initViewComponents()
+
+	return m.showNotification("✓", "Command added to resource", "success")
+}
+
 // Helper function for preferences wizard
 func boolToOnOff(b bool) string {
 	if b {
 		return "on"
 	}
 	return "off"
+}
+
+// saveProvider saves the current provider from the wizard to config
+func (m *model) saveProvider() tea.Cmd {
+	wizard := m.providersWizard
+	if wizard == nil {
+		return nil
+	}
+
+	newProvider := config.ProviderConfig{
+		Name:         wizard.Name,
+		ProviderType: wizard.ProviderType,
+		APIKey:       wizard.APIKey,
+		BaseURL:      wizard.BaseURL,
+		DefaultModel: wizard.DefaultModel,
+		Enabled:      wizard.Enabled,
+	}
+
+	// Check if we're editing an existing provider
+	isEdit := strings.HasPrefix(wizard.Action, "edit:")
+	if isEdit {
+		oldName := strings.TrimPrefix(wizard.Action, "edit:")
+		found := false
+		for i, p := range m.config.AI.Providers {
+			if p.Name == oldName {
+				m.config.AI.Providers[i] = newProvider
+				found = true
+				// Update default provider reference if name changed
+				if m.config.AI.DefaultProvider == oldName && oldName != wizard.Name {
+					m.config.AI.DefaultProvider = wizard.Name
+				}
+				break
+			}
+		}
+		if !found {
+			// Shouldn't happen, but add as new if not found
+			m.config.AI.Providers = append(m.config.AI.Providers, newProvider)
+		}
+	} else {
+		// Adding new provider
+		m.config.AI.Providers = append(m.config.AI.Providers, newProvider)
+	}
+
+	// If this is the first enabled provider, make it the default
+	if m.config.AI.DefaultProvider == "" && newProvider.Enabled {
+		m.config.AI.DefaultProvider = newProvider.Name
+	}
+
+	config.Save(m.config)
+	m.providersWizard = nil
+
+	action := "added"
+	if isEdit {
+		action = "updated"
+	}
+	return m.showNotification("✓", fmt.Sprintf("Provider %s %s", wizard.Name, action), "success")
+}
+
+// startDeleteResourceWizard begins the delete confirmation flow
+func (m *model) startDeleteResourceWizard() tea.Cmd {
+	res := m.currentResource()
+	if res == nil {
+		return m.showNotification("!", "No resource selected", "error")
+	}
+
+	m.deleteResourceWizard = &DeleteResourceWizard{
+		ResourceName: res.name,
+		IsEmbedded:   res.embedded,
+		Confirmed:    false,
+	}
+
+	return m.buildDeleteResourceForm()
+}
+
+// buildDeleteResourceForm creates the confirmation form
+func (m *model) buildDeleteResourceForm() tea.Cmd {
+	wizard := m.deleteResourceWizard
+	if wizard == nil {
+		return nil
+	}
+
+	title := "Confirm Deletion"
+	description := fmt.Sprintf("Are you sure you want to delete '%s'?", wizard.ResourceName)
+	if wizard.IsEmbedded {
+		description = fmt.Sprintf("Delete your customizations to '%s'?\nThe default version will be restored.", wizard.ResourceName)
+	}
+
+	wizard.InputForm = huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(title).
+				Description(description).
+				Affirmative("Delete").
+				Negative("Cancel").
+				Value(&wizard.Confirmed),
+		),
+	).
+		WithWidth(50).
+		WithShowHelp(true).
+		WithShowErrors(true).
+		WithTheme(huh.ThemeCatppuccin())
+
+	return wizard.InputForm.Init()
+}
+
+// confirmDeleteResource deletes the resource file
+func (m *model) confirmDeleteResource() tea.Cmd {
+	wizard := m.deleteResourceWizard
+	if wizard == nil {
+		return nil
+	}
+
+	if !wizard.Confirmed {
+		m.deleteResourceWizard = nil
+		return nil
+	}
+
+	// Build the file path
+	filePath := filepath.Join(config.ResourcesDir, wizard.ResourceName+".md")
+
+	// Check if file exists in user directory
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		m.deleteResourceWizard = nil
+		if wizard.IsEmbedded {
+			return m.showNotification("!", "Cannot delete built-in resource", "error")
+		}
+		return m.showNotification("!", "Resource file not found", "error")
+	}
+
+	// Delete the file
+	if err := os.Remove(filePath); err != nil {
+		m.deleteResourceWizard = nil
+		return m.showNotification("!", "Failed to delete: "+err.Error(), "error")
+	}
+
+	// Also delete the detail file if it exists
+	detailPath := filepath.Join(config.ResourcesDir, wizard.ResourceName+"-detail.md")
+	os.Remove(detailPath) // Ignore error, it may not exist
+
+	resourceName := wizard.ResourceName
+	wasEmbedded := wizard.IsEmbedded
+	m.deleteResourceWizard = nil
+
+	// Reload resources
+	m.loadResources()
+
+	// Adjust cursor if needed
+	if m.resCursor >= len(m.resources) {
+		m.resCursor = max(0, len(m.resources)-1)
+	}
+
+	if wasEmbedded {
+		return m.showNotification("✓", fmt.Sprintf("Restored default: %s", resourceName), "success")
+	}
+	return m.showNotification("✓", fmt.Sprintf("Deleted: %s", resourceName), "success")
 }
 
 // editResource opens the selected resource in the user's external editor
@@ -1253,6 +1602,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Forward non-key messages to delete resource wizard form
+	if m.deleteResourceWizard != nil && m.deleteResourceWizard.InputForm != nil {
+		if _, isKey := msg.(tea.KeyMsg); !isKey {
+			form, cmd := m.deleteResourceWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.deleteResourceWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.confirmDeleteResource()
+				}
+			}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case clearNotificationMsg:
 		m.notification = nil
@@ -1372,6 +1737,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closePalette()
 		}
 
+		return m, nil
+
+	case aiResponseMsg:
+		if m.askPanel != nil {
+			m.askPanel.Loading = false
+			if msg.err != nil {
+				m.askPanel.Error = msg.err.Error()
+			} else {
+				m.askPanel.Response = msg.response
+				m.askPanel.GeneratedCmd = msg.generatedCmd
+			}
+		}
+		return m, nil
+
+	case providerTestMsg:
+		if m.providersWizard != nil {
+			m.providersWizard.Testing = false
+			if msg.success {
+				m.providersWizard.TestResult = "Connection successful!"
+				m.providersWizard.TestError = ""
+				// Auto-save after successful test
+				return m, m.saveProvider()
+			} else {
+				errMsg := "Connection failed"
+				if msg.err != nil {
+					errMsg = msg.err.Error()
+					// Parse common errors for friendlier messages
+					if strings.Contains(errMsg, "401") {
+						errMsg = "Authentication failed - check your API key"
+					} else if strings.Contains(errMsg, "connection refused") {
+						errMsg = "Connection refused - is the server running?"
+					}
+				}
+				m.providersWizard.TestError = errMsg
+				m.providersWizard.TestResult = ""
+			}
+		}
 		return m, nil
 
 	case deployWizardAccountsMsg:
@@ -1610,6 +2012,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle Ask AI panel when active
+		if m.askPanel != nil && m.askPanel.Active {
+			switch keyStr {
+			case "esc":
+				m.askPanel = nil
+				return m, nil
+			case "enter":
+				if m.askPanel.Input != "" && !m.askPanel.Loading {
+					return m, m.submitAskPanel()
+				}
+				return m, nil
+			case "backspace":
+				if len(m.askPanel.Input) > 0 {
+					m.askPanel.Input = m.askPanel.Input[:len(m.askPanel.Input)-1]
+				}
+				return m, nil
+			case "ctrl+g":
+				// Generate command mode
+				if m.askPanel.Input != "" && !m.askPanel.Loading {
+					return m, m.submitGenerateCommand()
+				}
+				return m, nil
+			case "ctrl+r":
+				// Run generated command
+				if m.askPanel.GeneratedCmd != "" {
+					cmd := m.askPanel.GeneratedCmd
+					m.askPanel = nil
+					return m, m.runCommand(CommandSpec{
+						Command: cmd,
+						Mode:    CommandEmbedded,
+					})
+				}
+				return m, nil
+			case "ctrl+a":
+				// Add generated command to resource
+				if m.askPanel.GeneratedCmd != "" {
+					return m, m.addCommandToResource(m.askPanel.GeneratedCmd)
+				}
+				return m, nil
+			default:
+				// Type into input
+				if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
+					m.askPanel.Input += keyStr
+				} else if keyStr == "space" {
+					m.askPanel.Input += " "
+				}
+				return m, nil
+			}
+		}
+
 		if m.currentView == viewDetail && m.viewReady {
 			switch msg.String() {
 			case "q":
@@ -1684,6 +2136,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cmdCursor = 0
 					}
 					m.refreshCommandListDisplay()
+				}
+				return m, nil
+
+			case "a":
+				// Open Ask AI panel
+				if m.config.AI.DefaultProvider == "" {
+					return m, m.showNotification("!", "Configure a provider first", "warning")
+				}
+				m.askPanel = &AskPanel{
+					Active: true,
+					Input:  "",
 				}
 				return m, nil
 
@@ -1822,6 +2285,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		// Handle Delete Resource wizard form if active
+		if m.deleteResourceWizard != nil && m.deleteResourceWizard.InputForm != nil {
+			switch keyStr {
+			case "esc":
+				m.deleteResourceWizard = nil
+				return m, nil
+			}
+
+			form, cmd := m.deleteResourceWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.deleteResourceWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.confirmDeleteResource()
+				}
+			}
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -1856,6 +2337,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Edit selected resource in external editor
 			if m.dashboardTab == 0 {
 				return m, m.editResource()
+			}
+			return m, nil
+
+		case "d":
+			// Delete selected resource
+			if m.dashboardTab == 0 {
+				return m, m.startDeleteResourceWizard()
 			}
 			return m, nil
 

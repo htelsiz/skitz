@@ -46,16 +46,28 @@ type PreferencesWizard struct {
 
 // ProvidersWizard holds state for the Configure Providers wizard
 type ProvidersWizard struct {
-	Step         int       // 0=menu, 1=provider form, 2=set default
+	Step         int       // 0=menu, 1=type select, 2=details form, 3=test, 4=set default
 	Action       string    // "add", "edit:name", "remove:name", "default"
 	InputForm    *huh.Form
 	// Provider fields
-	ProviderType string // "openai", "anthropic", "ollama", "custom"
+	ProviderType string // "openai", "anthropic", "ollama", "openai-compatible"
 	Name         string
 	APIKey       string
 	BaseURL      string
 	DefaultModel string
 	Enabled      bool
+	// Test connection state
+	Testing    bool
+	TestResult string
+	TestError  string
+}
+
+// DeleteResourceWizard holds state for delete confirmation
+type DeleteResourceWizard struct {
+	ResourceName string
+	IsEmbedded   bool
+	Confirmed    bool
+	InputForm    *huh.Form
 }
 
 // section represents a documentation section within a resource

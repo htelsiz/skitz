@@ -173,8 +173,8 @@ func (m model) renderActionsTab(width, height int) string {
 			wizardStyle.Render(wizardContent))
 	}
 
-	// If providers wizard is active, show wizard form
-	if m.providersWizard != nil && m.providersWizard.InputForm != nil {
+	// If providers wizard is active, show wizard form or test status
+	if m.providersWizard != nil && (m.providersWizard.InputForm != nil || m.providersWizard.Step == 3) {
 		wizardStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("39")). // Blue for providers
@@ -195,6 +195,8 @@ func (m model) renderActionsTab(width, height int) string {
 				title = "Add Provider"
 			}
 		case 3:
+			title = "Test Connection"
+		case 4:
 			title = "Set Default Provider"
 		}
 
@@ -203,13 +205,50 @@ func (m model) renderActionsTab(width, height int) string {
 			Bold(true).
 			Render("◈ " + title)
 
-		formView := m.providersWizard.InputForm.View()
+		var contentBody string
+		if m.providersWizard.Step == 3 {
+			// Test connection step - show status, not form
+			if m.providersWizard.Testing {
+				spinner := lipgloss.NewStyle().
+					Foreground(lipgloss.Color("39")).
+					Render("⠋")
+				contentBody = lipgloss.JoinVertical(lipgloss.Center,
+					"",
+					spinner+" Testing connection to "+m.providersWizard.ProviderType+"...",
+					"",
+					lipgloss.NewStyle().Foreground(subtle).Render("Please wait"),
+					"",
+				)
+			} else if m.providersWizard.TestError != "" {
+				errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+				contentBody = lipgloss.JoinVertical(lipgloss.Center,
+					"",
+					errorStyle.Render("✗ Connection Failed"),
+					"",
+					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(m.providersWizard.TestError),
+					"",
+					lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to go back and fix settings"),
+					"",
+				)
+			} else if m.providersWizard.TestResult != "" {
+				successStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
+				contentBody = lipgloss.JoinVertical(lipgloss.Center,
+					"",
+					successStyle.Render("✓ "+m.providersWizard.TestResult),
+					"",
+					lipgloss.NewStyle().Foreground(subtle).Render("Provider saved successfully!"),
+					"",
+				)
+			}
+		} else {
+			contentBody = m.providersWizard.InputForm.View()
+		}
 
 		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
 			"",
 			header,
 			"",
-			formView,
+			contentBody,
 			"",
 			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
 			"",
@@ -716,6 +755,36 @@ func (m model) renderDashboard() string {
 		body = body + strings.Repeat("\n", contentH-bodyH)
 	}
 
+	// If delete resource wizard is active, render it as an overlay (same style as other wizards)
+	if m.deleteResourceWizard != nil && m.deleteResourceWizard.InputForm != nil {
+		wizardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("196")).
+			Padding(1, 2).
+			Align(lipgloss.Center)
+
+		header := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true).
+			Render("Delete Resource")
+
+		formView := m.deleteResourceWizard.InputForm.View()
+
+		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			header,
+			"",
+			formView,
+			"",
+			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
+			"",
+		)
+
+		body = lipgloss.Place(m.width-4, contentH,
+			lipgloss.Center, lipgloss.Center,
+			wizardStyle.Render(wizardContent))
+	}
+
 	return body
 }
 
@@ -945,8 +1014,21 @@ func (m model) renderResourceView() string {
 		contentArea = "Loading..."
 	}
 
+	// Render Ask AI panel if active
+	var askPanelView string
+	if m.askPanel != nil && m.askPanel.Active {
+		askPanelView = m.renderAskPanel(viewW)
+	}
+
 	var view string
-	if m.term.active {
+	if m.askPanel != nil && m.askPanel.Active {
+		view = lipgloss.JoinVertical(lipgloss.Left,
+			tabBar,
+			accentLine,
+			infoBar,
+			askPanelView,
+		)
+	} else if m.term.active {
 		termPane := m.renderTerminalPane()
 		view = lipgloss.JoinVertical(lipgloss.Left,
 			tabBar,
@@ -971,6 +1053,89 @@ func (m model) renderResourceView() string {
 	}
 
 	return view
+}
+
+// renderAskPanel renders the AI ask panel
+func (m model) renderAskPanel(width int) string {
+	panelStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 2).
+		Width(width - 4)
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Bold(true)
+
+	inputStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("235")).
+		Foreground(lipgloss.Color("255")).
+		Padding(0, 1).
+		Width(width - 12)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(subtle).
+		Italic(true)
+
+	keyHintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39"))
+
+	var lines []string
+
+	// Title
+	lines = append(lines, titleStyle.Render("◈ Ask AI about "+m.currentResource().name))
+	lines = append(lines, "")
+
+	// Input field
+	inputContent := m.askPanel.Input
+	if m.askPanel.Loading {
+		inputContent = m.askPanel.Input + " ..."
+	}
+	cursor := "▌"
+	if m.askPanel.Loading {
+		cursor = ""
+	}
+	lines = append(lines, inputStyle.Render("> "+inputContent+cursor))
+	lines = append(lines, "")
+
+	// Response or loading
+	if m.askPanel.Loading {
+		lines = append(lines, hintStyle.Render("Thinking..."))
+	} else if m.askPanel.Error != "" {
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+		lines = append(lines, errorStyle.Render("Error: "+m.askPanel.Error))
+	} else if m.askPanel.Response != "" {
+		responseStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Width(width - 12)
+		lines = append(lines, responseStyle.Render(m.askPanel.Response))
+
+		// Show generated command if available
+		if m.askPanel.GeneratedCmd != "" {
+			lines = append(lines, "")
+			cmdStyle := lipgloss.NewStyle().
+				Background(lipgloss.Color("236")).
+				Foreground(lipgloss.Color("114")).
+				Bold(true).
+				Padding(0, 1)
+			lines = append(lines, cmdStyle.Render("$ "+m.askPanel.GeneratedCmd))
+			lines = append(lines, "")
+			lines = append(lines,
+				keyHintStyle.Render("ctrl+r")+hintStyle.Render(" run  ")+
+					keyHintStyle.Render("ctrl+a")+hintStyle.Render(" add to resource"))
+		}
+	}
+
+	lines = append(lines, "")
+
+	// Hints
+	lines = append(lines,
+		keyHintStyle.Render("enter")+hintStyle.Render(" ask  ")+
+			keyHintStyle.Render("ctrl+g")+hintStyle.Render(" generate cmd  ")+
+			keyHintStyle.Render("esc")+hintStyle.Render(" close"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return panelStyle.Render(content)
 }
 
 func (m model) renderStatusBar() string {
@@ -1011,6 +1176,7 @@ func (m model) renderStatusBar() string {
 			keyStyle.Render("ctrl+k") + descStyle.Render(" palette") + sep +
 			keyStyle.Render("↑↓") + descStyle.Render(" nav") + sep +
 			keyStyle.Render("e") + descStyle.Render(" edit") + sep +
+			keyStyle.Render("d") + descStyle.Render(" delete") + sep +
 			keyStyle.Render("enter") + descStyle.Render(" open") + sep +
 			keyStyle.Render("q") + descStyle.Render(" quit")
 	} else {
@@ -1032,9 +1198,9 @@ func (m model) renderStatusBar() string {
 
 		leftContent = breadcrumb
 
-		rightContent = keyStyle.Render("↑↓/jk") + descStyle.Render(" select") + sep +
+		rightContent = keyStyle.Render("a") + descStyle.Render(" ask AI") + sep +
+			keyStyle.Render("↑↓") + descStyle.Render(" select") + sep +
 			keyStyle.Render("enter") + descStyle.Render(" run") + sep +
-			keyStyle.Render("←→/hl") + descStyle.Render(" section") + sep +
 			keyStyle.Render("esc") + descStyle.Render(" back")
 	}
 
