@@ -8,6 +8,234 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// renderDashboardTabs renders the tab bar for Resources/Actions
+func (m model) renderDashboardTabs(width int) string {
+	tabs := []string{"RESOURCES", "ACTIONS"}
+
+	var tabRow1, tabRow2, tabRow3 []string
+
+	for i, title := range tabs {
+		label := fmt.Sprintf("  %s  ", title)
+		labelW := len(label)
+
+		if i == m.dashboardTab {
+			// Active tab - bold borders, purple accent, filled background
+			topBorder := lipgloss.NewStyle().
+				Foreground(primary).
+				Render("┏" + strings.Repeat("━", labelW) + "┓")
+
+			content := lipgloss.NewStyle().
+				Foreground(primary).
+				Render("┃") +
+				lipgloss.NewStyle().
+					Background(primary).
+					Foreground(lipgloss.Color("255")).
+					Bold(true).
+					Render(label) +
+				lipgloss.NewStyle().
+					Foreground(primary).
+					Render("┃")
+
+			bottomBorder := lipgloss.NewStyle().
+				Foreground(primary).
+				Render("┗" + strings.Repeat("━", labelW) + "┛")
+
+			tabRow1 = append(tabRow1, topBorder)
+			tabRow2 = append(tabRow2, content)
+			tabRow3 = append(tabRow3, bottomBorder)
+		} else {
+			// Inactive tab - light borders, dim color
+			topBorder := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				Render("┌" + strings.Repeat("─", labelW) + "┐")
+
+			content := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				Render("│") +
+				lipgloss.NewStyle().
+					Foreground(lipgloss.Color("248")).
+					Render(label) +
+				lipgloss.NewStyle().
+					Foreground(lipgloss.Color("240")).
+					Render("│")
+
+			bottomBorder := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("240")).
+				Render("└" + strings.Repeat("─", labelW) + "┘")
+
+			tabRow1 = append(tabRow1, topBorder)
+			tabRow2 = append(tabRow2, content)
+			tabRow3 = append(tabRow3, bottomBorder)
+		}
+
+		if i < len(tabs)-1 {
+			tabRow1 = append(tabRow1, "   ")
+			tabRow2 = append(tabRow2, "   ")
+			tabRow3 = append(tabRow3, "   ")
+		}
+	}
+
+	row1 := strings.Join(tabRow1, "")
+	row2 := strings.Join(tabRow2, "")
+	row3 := strings.Join(tabRow3, "")
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().PaddingLeft(1).Render(row1),
+		lipgloss.NewStyle().PaddingLeft(1).Render(row2),
+		lipgloss.NewStyle().PaddingLeft(1).Render(row3),
+	)
+}
+
+// renderActionsTab renders the list of available actions
+func (m model) renderActionsTab(width, height int) string {
+	// If add resource wizard is active, show wizard form
+	if m.addResourceWizard != nil && m.addResourceWizard.InputForm != nil {
+		wizardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(primary).
+			Padding(1, 2).
+			Width(width - 10).
+			Align(lipgloss.Center)
+
+		stepLabels := []string{"Step 1: Name", "Step 2: Template", "Step 3: Confirm"}
+		stepLabel := ""
+		if m.addResourceWizard.Step < len(stepLabels) {
+			stepLabel = stepLabels[m.addResourceWizard.Step]
+		}
+
+		header := lipgloss.NewStyle().
+			Foreground(primary).
+			Bold(true).
+			Render("Add Resource Wizard - " + stepLabel)
+
+		formView := m.addResourceWizard.InputForm.View()
+
+		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			header,
+			"",
+			formView,
+			"",
+			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
+			"",
+		)
+
+		return lipgloss.Place(width, height,
+			lipgloss.Center, lipgloss.Center,
+			wizardStyle.Render(wizardContent))
+	}
+
+	// If preferences wizard is active, show wizard form
+	if m.preferencesWizard != nil && m.preferencesWizard.InputForm != nil {
+		wizardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(secondary).
+			Padding(1, 2).
+			Width(width - 10).
+			Align(lipgloss.Center)
+
+		var title string
+		switch m.preferencesWizard.Step {
+		case 0:
+			title = "Preferences"
+		case 1:
+			switch m.preferencesWizard.Section {
+			case "history":
+				title = "History Settings"
+			case "mcp":
+				title = "MCP Servers"
+			default:
+				title = "Preferences"
+			}
+		case 2:
+			title = "MCP Server Configuration"
+		}
+
+		header := lipgloss.NewStyle().
+			Foreground(secondary).
+			Bold(true).
+			Render("⚙ " + title)
+
+		formView := m.preferencesWizard.InputForm.View()
+
+		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			header,
+			"",
+			formView,
+			"",
+			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
+			"",
+		)
+
+		return lipgloss.Place(width, height,
+			lipgloss.Center, lipgloss.Center,
+			wizardStyle.Render(wizardContent))
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(secondary).
+		Bold(true)
+
+	var actionCards []string
+
+	for i, action := range m.actionItems {
+		isSelected := i == m.actionCursor
+
+		// Build card content
+		iconStyle := lipgloss.NewStyle().Foreground(primary).Bold(true)
+		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(white)
+		descStyle := lipgloss.NewStyle().Foreground(subtle)
+		shortcutStyle := lipgloss.NewStyle().Foreground(subtle)
+
+		cardContent := lipgloss.JoinVertical(lipgloss.Left,
+			iconStyle.Render(action.Icon)+"  "+nameStyle.Render(action.Name),
+			descStyle.Render(action.Description),
+			"",
+			shortcutStyle.Render(fmt.Sprintf("[%d] to select", i+1)),
+		)
+
+		// Card styling based on selection
+		var cardStyle lipgloss.Style
+		if isSelected {
+			cardStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(primary).
+				Padding(1, 2).
+				Width(width/3 - 4)
+		} else {
+			cardStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(dimBorder).
+				Padding(1, 2).
+				Width(width/3 - 4)
+		}
+
+		actionCards = append(actionCards, cardStyle.Render(cardContent))
+	}
+
+	// Join cards horizontally
+	cardsRow := lipgloss.JoinHorizontal(lipgloss.Top, actionCards...)
+
+	// Info text
+	infoStyle := lipgloss.NewStyle().
+		Foreground(subtle).
+		Italic(true)
+
+	info := infoStyle.Render("Select an action and press Enter to start")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		"",
+		titleStyle.Render("Available Actions"),
+		"",
+		cardsRow,
+		"",
+		info,
+	)
+
+	return lipgloss.NewStyle().Padding(0, 2).Render(content)
+}
+
 func (m model) renderDashboard() string {
 	contentH := m.height - 2
 
@@ -383,7 +611,21 @@ func (m model) renderDashboard() string {
 
 	cardGrid := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
-	rightContent := lipgloss.JoinVertical(lipgloss.Left, header, cardGrid)
+	// Render tab bar
+	tabBar := m.renderDashboardTabs(mainAreaW)
+
+	// Conditional content based on selected tab
+	var tabContent string
+	if m.dashboardTab == 0 {
+		// Resources tab - show resource cards
+		tabContent = cardGrid
+	} else {
+		// Actions tab - show actions list
+		remainingH := contentH - lipgloss.Height(header) - lipgloss.Height(tabBar) - 2
+		tabContent = m.renderActionsTab(mainAreaW, remainingH)
+	}
+
+	rightContent := lipgloss.JoinVertical(lipgloss.Left, header, tabBar, tabContent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, actionsPanel, " ", rightContent)
 
@@ -676,12 +918,17 @@ func (m model) renderStatusBar() string {
 	var leftContent, rightContent string
 
 	if m.currentView == viewDashboard {
+		tabName := "Resources"
+		if m.dashboardTab == 1 {
+			tabName = "Actions"
+		}
 		leftContent = brandStyleSB.Render("SKITZ") + bgStyle.Render("  ") +
-			contextStyle.Render("Dashboard")
+			contextStyle.Render("Dashboard › "+tabName)
 
-		rightContent = keyStyle.Render("ctrl+k") + descStyle.Render(" palette") + sep +
+		rightContent = keyStyle.Render("tab") + descStyle.Render(" switch") + sep +
+			keyStyle.Render("ctrl+k") + descStyle.Render(" palette") + sep +
 			keyStyle.Render("↑↓") + descStyle.Render(" nav") + sep +
-			keyStyle.Render("1-9") + descStyle.Render(" jump") + sep +
+			keyStyle.Render("e") + descStyle.Render(" edit") + sep +
 			keyStyle.Render("enter") + descStyle.Render(" open") + sep +
 			keyStyle.Render("q") + descStyle.Render(" quit")
 	} else {

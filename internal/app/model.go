@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,15 @@ type model struct {
 
 	// View state
 	currentView int // viewDashboard or viewDetail
+
+	// Dashboard tabs
+	dashboardTab         int               // 0=Resources, 1=Actions
+	actionItems          []DashboardAction // Available actions
+	actionCursor         int               // Selected action
+	addResourceWizard    *AddResourceWizard  // Add Resource wizard state
+	preferencesWizard    *PreferencesWizard  // Preferences wizard state
+	pendingResourceReload bool               // Reload resources after editor closes
+	pendingConfigReload   bool               // Reload config after editor closes
 
 	// View components (bubbles)
 	contentView viewport.Model
@@ -134,6 +145,7 @@ func newModel(startResource string) model {
 		favorites:    favorites,
 	}
 	m.loadResources()
+	m.actionItems = m.buildDashboardActions()
 
 	if startResource != "" {
 		for i, r := range m.resources {
@@ -148,7 +160,480 @@ func newModel(startResource string) model {
 	return m
 }
 
+// buildDashboardActions creates the list of available dashboard actions
+func (m *model) buildDashboardActions() []DashboardAction {
+	return []DashboardAction{
+		{
+			ID:          "add_resource",
+			Name:        "Add Resource",
+			Icon:        "+",
+			Description: "Create a new resource file",
+			Handler: func(m *model) tea.Cmd {
+				return m.startAddResourceWizard()
+			},
+		},
+		{
+			ID:          "preferences",
+			Name:        "Preferences",
+			Icon:        "⚙",
+			Description: "Edit skitz configuration",
+			Handler: func(m *model) tea.Cmd {
+				return m.editPreferences()
+			},
+		},
+	}
+}
+
+// startAddResourceWizard begins the Add Resource wizard flow
+func (m *model) startAddResourceWizard() tea.Cmd {
+	m.addResourceWizard = &AddResourceWizard{
+		Step:     0,
+		Name:     "",
+		Template: "blank",
+	}
+	return m.buildAddResourceForm()
+}
+
+// buildAddResourceForm creates the huh form for the current wizard step
+func (m *model) buildAddResourceForm() tea.Cmd {
+	wizard := m.addResourceWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0: // Name input
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Resource Name").
+					Description("Enter a name for your new resource").
+					Placeholder("my-resource").
+					Value(&wizard.Name),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 1: // Template selection
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Template").
+					Description("Choose a starting template").
+					Options(
+						huh.NewOption("Blank - Empty resource file", "blank"),
+						huh.NewOption("Commands - Basic command structure", "commands"),
+						huh.NewOption("Detailed - Full sections layout", "detailed"),
+					).
+					Value(&wizard.Template),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 2: // Confirmation
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Create Resource?").
+					Description(fmt.Sprintf("Create '%s' with '%s' template?", wizard.Name, wizard.Template)).
+					Affirmative("Create").
+					Negative("Cancel"),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+	}
+
+	return nil
+}
+
+// nextAddResourceStep advances the wizard to the next step
+func (m *model) nextAddResourceStep() tea.Cmd {
+	wizard := m.addResourceWizard
+	if wizard == nil {
+		return nil
+	}
+
+	wizard.Step++
+	if wizard.Step > 2 {
+		// Wizard complete, create the file
+		return m.createResourceFile()
+	}
+
+	return m.buildAddResourceForm()
+}
+
+// editPreferences starts the preferences wizard
+func (m *model) editPreferences() tea.Cmd {
+	m.preferencesWizard = &PreferencesWizard{
+		Step:                0,
+		HistoryEnabled:      m.config.History.Enabled,
+		HistoryMaxItems:     fmt.Sprintf("%d", m.config.History.MaxItems),
+		HistoryDisplayCount: fmt.Sprintf("%d", m.config.History.DisplayCount),
+		MCPEnabled:          m.config.MCP.Enabled,
+		Editor:              os.Getenv("EDITOR"),
+	}
+	return m.buildPreferencesForm()
+}
+
+// buildPreferencesForm creates the form for the current preferences step
+func (m *model) buildPreferencesForm() tea.Cmd {
+	wizard := m.preferencesWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0: // Main menu
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Preferences").
+					Description("What would you like to configure?").
+					Options(
+						huh.NewOption("History Settings", "history"),
+						huh.NewOption("MCP Servers", "mcp"),
+						huh.NewOption("Edit Config File", "editor"),
+					).
+					Value(&wizard.Section),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 1: // Section-specific forms
+		switch wizard.Section {
+		case "history":
+			wizard.InputForm = huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Enable History").
+						Description("Track command execution history").
+						Value(&wizard.HistoryEnabled),
+					huh.NewInput().
+						Title("Max Items").
+						Description("Maximum history entries to keep").
+						Value(&wizard.HistoryMaxItems),
+					huh.NewInput().
+						Title("Display Count").
+						Description("Number of items shown in sidebar").
+						Value(&wizard.HistoryDisplayCount),
+				),
+			).
+				WithWidth(80).
+				WithShowHelp(true).
+				WithTheme(huh.ThemeCatppuccin())
+			return wizard.InputForm.Init()
+
+		case "mcp":
+			// Build options from current servers
+			var serverOptions []huh.Option[string]
+			serverOptions = append(serverOptions, huh.NewOption("Add New Server", "add"))
+			for _, srv := range m.config.MCP.Servers {
+				serverOptions = append(serverOptions, huh.NewOption("Edit: "+srv.Name, "edit:"+srv.Name))
+				serverOptions = append(serverOptions, huh.NewOption("Remove: "+srv.Name, "remove:"+srv.Name))
+			}
+			serverOptions = append(serverOptions, huh.NewOption("Toggle MCP (currently "+boolToOnOff(wizard.MCPEnabled)+")", "toggle"))
+
+			wizard.InputForm = huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("MCP Servers").
+						Description("Manage Model Context Protocol servers").
+						Options(serverOptions...).
+						Value(&wizard.MCPAction),
+				),
+			).
+				WithWidth(80).
+				WithShowHelp(true).
+				WithTheme(huh.ThemeCatppuccin())
+			return wizard.InputForm.Init()
+
+		case "editor":
+			// Open config file in editor
+			m.preferencesWizard = nil
+			return m.openConfigInEditor()
+		}
+
+	case 2: // MCP add/edit form
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Server Name").
+					Description("A friendly name for this server").
+					Placeholder("my-server").
+					Value(&wizard.MCPName),
+				huh.NewInput().
+					Title("Server URL").
+					Description("The MCP server endpoint").
+					Placeholder("http://localhost:8001/mcp/").
+					Value(&wizard.MCPURL),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+	}
+
+	return nil
+}
+
+// nextPreferencesStep advances the preferences wizard
+func (m *model) nextPreferencesStep() tea.Cmd {
+	wizard := m.preferencesWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0: // After menu selection
+		wizard.Step = 1
+		return m.buildPreferencesForm()
+
+	case 1: // After section form
+		switch wizard.Section {
+		case "history":
+			// Save history settings
+			m.config.History.Enabled = wizard.HistoryEnabled
+			if maxItems, err := strconv.Atoi(wizard.HistoryMaxItems); err == nil && maxItems > 0 {
+				m.config.History.MaxItems = maxItems
+			}
+			if displayCount, err := strconv.Atoi(wizard.HistoryDisplayCount); err == nil && displayCount > 0 {
+				m.config.History.DisplayCount = displayCount
+			}
+			config.Save(m.config)
+			m.preferencesWizard = nil
+			return m.showNotification("✓", "History settings saved", "success")
+
+		case "mcp":
+			if wizard.MCPAction == "toggle" {
+				wizard.MCPEnabled = !wizard.MCPEnabled
+				m.config.MCP.Enabled = wizard.MCPEnabled
+				config.Save(m.config)
+				m.preferencesWizard = nil
+				status := "disabled"
+				if wizard.MCPEnabled {
+					status = "enabled"
+				}
+				return m.showNotification("✓", "MCP "+status, "success")
+			} else if wizard.MCPAction == "add" {
+				wizard.MCPName = ""
+				wizard.MCPURL = ""
+				wizard.Step = 2
+				return m.buildPreferencesForm()
+			} else if strings.HasPrefix(wizard.MCPAction, "edit:") {
+				serverName := strings.TrimPrefix(wizard.MCPAction, "edit:")
+				for _, srv := range m.config.MCP.Servers {
+					if srv.Name == serverName {
+						wizard.MCPName = srv.Name
+						wizard.MCPURL = srv.URL
+						break
+					}
+				}
+				wizard.Step = 2
+				return m.buildPreferencesForm()
+			} else if strings.HasPrefix(wizard.MCPAction, "remove:") {
+				serverName := strings.TrimPrefix(wizard.MCPAction, "remove:")
+				var newServers []config.MCPServerConfig
+				for _, srv := range m.config.MCP.Servers {
+					if srv.Name != serverName {
+						newServers = append(newServers, srv)
+					}
+				}
+				m.config.MCP.Servers = newServers
+				config.Save(m.config)
+				m.preferencesWizard = nil
+				return m.showNotification("✓", "Removed "+serverName, "success")
+			}
+		}
+
+	case 2: // After MCP add/edit form
+		if wizard.MCPName == "" || wizard.MCPURL == "" {
+			m.preferencesWizard = nil
+			return m.showNotification("!", "Name and URL are required", "error")
+		}
+
+		if strings.HasPrefix(wizard.MCPAction, "edit:") {
+			// Update existing server
+			oldName := strings.TrimPrefix(wizard.MCPAction, "edit:")
+			for i, srv := range m.config.MCP.Servers {
+				if srv.Name == oldName {
+					m.config.MCP.Servers[i].Name = wizard.MCPName
+					m.config.MCP.Servers[i].URL = wizard.MCPURL
+					break
+				}
+			}
+		} else {
+			// Add new server
+			m.config.MCP.Servers = append(m.config.MCP.Servers, config.MCPServerConfig{
+				Name: wizard.MCPName,
+				URL:  wizard.MCPURL,
+			})
+		}
+		config.Save(m.config)
+		m.preferencesWizard = nil
+		return m.showNotification("✓", "MCP server saved", "success")
+	}
+
+	m.preferencesWizard = nil
+	return nil
+}
+
+// openConfigInEditor opens the config file in the user's editor
+func (m *model) openConfigInEditor() tea.Cmd {
+	if err := os.MkdirAll(config.ConfigDir, 0755); err != nil {
+		return m.showNotification("!", "Failed to create config directory: "+err.Error(), "error")
+	}
+
+	configPath := filepath.Join(config.ConfigDir, "config.yaml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		config.Save(m.config)
+	}
+
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		for _, e := range []string{"vim", "vi", "nano"} {
+			if _, err := exec.LookPath(e); err == nil {
+				editor = e
+				break
+			}
+		}
+	}
+	if editor == "" {
+		return m.showNotification("!", "No editor found. Set $EDITOR", "error")
+	}
+
+	m.pendingConfigReload = true
+	return m.runCommand(CommandSpec{
+		Command: fmt.Sprintf("%s %q", editor, configPath),
+		Mode:    CommandInteractive,
+	})
+}
+
+// Helper function for preferences wizard
+func boolToOnOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+// editResource opens the selected resource in the user's external editor
+func (m *model) editResource() tea.Cmd {
+	res := m.currentResource()
+	if res == nil {
+		return m.showNotification("!", "No resource selected", "error")
+	}
+
+	// Ensure user resources directory exists
+	if err := os.MkdirAll(config.ResourcesDir, 0755); err != nil {
+		return m.showNotification("!", "Failed to create directory: "+err.Error(), "error")
+	}
+
+	filePath := filepath.Join(config.ResourcesDir, res.name+".md")
+
+	// If resource is embedded and doesn't exist in user dir, copy it first
+	if res.embedded {
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			if err := os.WriteFile(filePath, []byte(res.content), 0644); err != nil {
+				return m.showNotification("!", "Failed to copy resource: "+err.Error(), "error")
+			}
+		}
+	}
+
+	// Get editor from environment
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		// Fallback to common editors
+		for _, e := range []string{"vim", "vi", "nano"} {
+			if _, err := exec.LookPath(e); err == nil {
+				editor = e
+				break
+			}
+		}
+	}
+	if editor == "" {
+		return m.showNotification("!", "No editor found. Set $EDITOR", "error")
+	}
+
+	// Set flag to reload resources when editor closes
+	m.pendingResourceReload = true
+
+	// Run editor in interactive mode
+	return m.runCommand(CommandSpec{
+		Command: fmt.Sprintf("%s %q", editor, filePath),
+		Mode:    CommandInteractive,
+	})
+}
+
+// createResourceFile writes the new resource file to disk
+func (m *model) createResourceFile() tea.Cmd {
+	wizard := m.addResourceWizard
+	if wizard == nil || wizard.Name == "" {
+		m.addResourceWizard = nil
+		return m.showNotification("!", "Resource name cannot be empty", "error")
+	}
+
+	// Sanitize name
+	name := strings.TrimSpace(wizard.Name)
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, " ", "-")
+
+	// Build content based on template
+	var content string
+	switch wizard.Template {
+	case "commands":
+		content = fmt.Sprintf("# %s\n\n## Commands\n\n`example-command` Example description ^run\n", name)
+	case "detailed":
+		content = fmt.Sprintf("# %s\n\n## Overview\n\nAdd overview here.\n\n## Commands\n\n`example-command` Example description ^run\n\n## Configuration\n\nAdd configuration notes here.\n", name)
+	default: // blank
+		content = fmt.Sprintf("# %s\n\n", name)
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(config.ResourcesDir, 0755); err != nil {
+		m.addResourceWizard = nil
+		return m.showNotification("!", "Failed to create directory: "+err.Error(), "error")
+	}
+
+	// Write file
+	filePath := filepath.Join(config.ResourcesDir, name+".md")
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		m.addResourceWizard = nil
+		return m.showNotification("!", "Failed to create file: "+err.Error(), "error")
+	}
+
+	// Reload resources and clear wizard
+	m.loadResources()
+	m.addResourceWizard = nil
+	m.dashboardTab = 0 // Switch back to Resources tab
+
+	return m.showNotification("", fmt.Sprintf("Created resource: %s", name), "success")
+}
+
 func (m *model) loadResources() {
+	// Clear existing resources before reloading
+	m.resources = nil
 	seen := make(map[string]bool)
 
 	descriptions := map[string]string{
@@ -395,11 +880,45 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Forward non-key messages to palette form
 	if m.palette.State == PaletteStateCollectingParams && m.palette.InputForm != nil {
 		if _, isKey := msg.(tea.KeyMsg); !isKey {
 			form, cmd := m.palette.InputForm.Update(msg)
 			if f, ok := form.(*huh.Form); ok {
 				m.palette.InputForm = f
+			}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
+	// Forward non-key messages to add resource wizard form
+	if m.addResourceWizard != nil && m.addResourceWizard.InputForm != nil {
+		if _, isKey := msg.(tea.KeyMsg); !isKey {
+			form, cmd := m.addResourceWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.addResourceWizard.InputForm = f
+				// Check for form completion after non-key message processing
+				if f.State == huh.StateCompleted {
+					return m, m.nextAddResourceStep()
+				}
+			}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
+	// Forward non-key messages to preferences wizard form
+	if m.preferencesWizard != nil && m.preferencesWizard.InputForm != nil {
+		if _, isKey := msg.(tea.KeyMsg); !isKey {
+			form, cmd := m.preferencesWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.preferencesWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextPreferencesStep()
+				}
 			}
 			if cmd != nil {
 				cmds = append(cmds, cmd)
@@ -433,6 +952,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = config.AddToHistory(m.history, entry, m.config.History.MaxItems)
 			if m.config.History.Persist {
 				config.SaveHistory(m.history)
+			}
+		}
+		// Reload resources if we were editing
+		if m.pendingResourceReload {
+			m.pendingResourceReload = false
+			m.loadResources()
+		}
+		// Reload config if we were editing preferences
+		if m.pendingConfigReload {
+			m.pendingConfigReload = false
+			m.config = config.Load(mcppkg.GetDefaultMCPServerURL())
+			// Update favorites map
+			m.favorites = make(map[string]bool)
+			for _, f := range m.config.Favorites {
+				m.favorites[f] = true
 			}
 		}
 		return m, nil
@@ -907,33 +1441,118 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
+		// Handle Add Resource wizard form if active
+		if m.addResourceWizard != nil && m.addResourceWizard.InputForm != nil {
+			switch keyStr {
+			case "esc":
+				m.addResourceWizard = nil
+				return m, nil
+			}
+
+			form, cmd := m.addResourceWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.addResourceWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextAddResourceStep()
+				}
+			}
+			return m, cmd
+		}
+
+		// Handle Preferences wizard form if active
+		if m.preferencesWizard != nil && m.preferencesWizard.InputForm != nil {
+			switch keyStr {
+			case "esc":
+				m.preferencesWizard = nil
+				return m, nil
+			}
+
+			form, cmd := m.preferencesWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.preferencesWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextPreferencesStep()
+				}
+			}
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
+		case "tab", "shift+tab":
+			// Switch between Resources and Actions tabs
+			if msg.String() == "tab" {
+				m.dashboardTab = (m.dashboardTab + 1) % 2
+			} else {
+				m.dashboardTab = (m.dashboardTab + 1) % 2
+			}
+			return m, nil
+
 		case "enter":
-			m.currentView = viewDetail
-			m.secCursor = 0
-			m.initViewComponents()
+			if m.dashboardTab == 0 {
+				// Resources tab - open resource detail
+				m.currentView = viewDetail
+				m.secCursor = 0
+				m.initViewComponents()
+			} else {
+				// Actions tab - execute action
+				if len(m.actionItems) > 0 && m.actionCursor < len(m.actionItems) {
+					action := m.actionItems[m.actionCursor]
+					if action.Handler != nil {
+						return m, action.Handler(&m)
+					}
+				}
+			}
+			return m, nil
+
+		case "e":
+			// Edit selected resource in external editor
+			if m.dashboardTab == 0 {
+				return m, m.editResource()
+			}
 			return m, nil
 
 		case "up", "k":
-			if m.resCursor > 0 {
-				m.resCursor--
+			if m.dashboardTab == 0 {
+				if m.resCursor > 0 {
+					m.resCursor--
+				}
+			} else {
+				if m.actionCursor > 0 {
+					m.actionCursor--
+				}
 			}
 
 		case "down", "j":
-			if m.resCursor < len(m.resources)-1 {
-				m.resCursor++
+			if m.dashboardTab == 0 {
+				if m.resCursor < len(m.resources)-1 {
+					m.resCursor++
+				}
+			} else {
+				if m.actionCursor < len(m.actionItems)-1 {
+					m.actionCursor++
+				}
 			}
 
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			idx := int(msg.String()[0] - '1')
-			if idx < len(m.resources) {
-				m.resCursor = idx
-				m.currentView = viewDetail
-				m.secCursor = 0
-				m.initViewComponents()
+			if m.dashboardTab == 0 {
+				if idx < len(m.resources) {
+					m.resCursor = idx
+					m.currentView = viewDetail
+					m.secCursor = 0
+					m.initViewComponents()
+				}
+			} else {
+				if idx < len(m.actionItems) {
+					m.actionCursor = idx
+					action := m.actionItems[m.actionCursor]
+					if action.Handler != nil {
+						return m, action.Handler(&m)
+					}
+				}
 			}
 		}
 	}

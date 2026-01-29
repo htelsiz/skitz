@@ -4,8 +4,45 @@ import (
 	"regexp"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// DashboardAction represents an action available in the Actions tab
+type DashboardAction struct {
+	ID          string
+	Name        string
+	Icon        string
+	Description string
+	Handler     func(m *model) tea.Cmd
+}
+
+// AddResourceWizard holds state for the Add Resource wizard
+type AddResourceWizard struct {
+	Step      int       // 0=name, 1=template, 2=confirm
+	Name      string
+	Template  string    // "blank", "commands", "detailed"
+	InputForm *huh.Form
+}
+
+// PreferencesWizard holds state for the Preferences wizard
+type PreferencesWizard struct {
+	Step      int       // 0=menu, 1+=subsections
+	Section   string    // "history", "mcp", "editor"
+	InputForm *huh.Form
+	// History settings
+	HistoryEnabled      bool
+	HistoryMaxItems     string // stored as string for form input
+	HistoryDisplayCount string // stored as string for form input
+	// MCP settings
+	MCPEnabled bool
+	MCPAction  string // "add", "remove", "edit"
+	MCPName    string
+	MCPURL     string
+	// Editor setting
+	Editor string
+}
 
 // section represents a documentation section within a resource
 type section struct {
