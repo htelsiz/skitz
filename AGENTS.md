@@ -14,19 +14,21 @@ Skitz is a terminal UI command reference system built with the **Charm** stack i
 
 | File | Purpose |
 |------|---------|
-| `main.go` | Entry point; initializes app and loads resources |
-| `model.go` | BubbleTea model; core state management |
-| `views.go` | View rendering (dashboard and detail views) |
-| `actions.go` | Quick actions and built-in action handlers |
-| `palette.go` | Command palette implementation (Ctrl+K) |
-| `config.go` | YAML-based configuration management |
-| `types.go` | Core data types and metadata definitions |
-| `exec.go` | Command execution with confirmation flow |
-| `mcp_client.go` | MCP client for AI server communication |
-| `agent_mcp.go` | BIA Junior Agent code review integration |
-| `deploy.go` | Azure deployment wizard |
-| `styles.go` | UI styling and color schemes |
-| `notifications.go` | Toast notification system |
+| `main.go` | Entry point |
+| `internal/app/model.go` | BubbleTea model; core state |
+| `internal/app/views.go` | View rendering |
+| `internal/app/keyboard.go` | Keyboard input handling |
+| `internal/app/palette.go` | Command palette (Ctrl+K) |
+| `internal/app/wizards.go` | Multi-step wizard flows |
+| `internal/app/actions.go` | Quick actions |
+| `internal/app/types.go` | Data types and metadata |
+| `internal/app/styles.go` | UI styling |
+| `internal/app/agent.go` | BIA agent integration |
+| `internal/app/cloud_agent.go` | Docker/E2B agent runtime |
+| `internal/app/deploy.go` | Azure deployment wizard |
+| `internal/app/terminal.go` | Embedded terminal |
+| `internal/config/config.go` | YAML configuration |
+| `internal/mcp/client.go` | MCP client |
 
 ### Data Storage
 
@@ -46,38 +48,34 @@ Skitz is a terminal UI command reference system built with the **Charm** stack i
 
 ## Key Components
 
-### MCP Client (`mcp_client.go`)
+### MCP Client (`internal/mcp/client.go`)
 
 HTTP-based client for Model Context Protocol servers:
-- Connection management with context timeouts (5s default)
+- Connection management with context timeouts
 - Tool listing and invocation
-- Server info and capabilities retrieval
 - Multi-server status monitoring
 
 **Environment**: `BLDRSPEC_MCP_URL` (default: `http://localhost:8001/mcp/`)
 
-### BIA Junior Agent (`agent_mcp.go`)
+### BIA Agent (`internal/app/agent.go`)
 
 Code review integration via MCP:
 - Invokes `bia_junior_agent` tool for code reviews
 - Supports file path input or paste mode
-- Renders feedback using Glamour markdown
-- Accessed via Command Palette (Ctrl+K) → "BIA Code Review"
+- Accessed via Command Palette (Ctrl+K)
 
-### Deploy Agent (`deploy.go`)
+### Cloud Agent (`internal/app/cloud_agent.go`)
 
-Azure deployment wizard:
+Agent runtime environments:
+- Docker container execution
+- E2B cloud sandbox support
+
+### Deploy Wizard (`internal/app/deploy.go`)
+
+Azure deployment:
 - Interactive configuration flow
-- Azure CLI integration detection
-- Supports Claude, Cursor, or custom agents
-- Deployment targets: Azure Container Instances (ACI) or Azure Pipelines
-
-### Command Execution (`exec.go`)
-
-- Interactive execution with confirmation
-- Parameter substitution via `{{INPUT}}` placeholders
-- History tracking with persistence
-- Annotated commands with `^run` and `^run:varname` tags
+- Azure CLI integration
+- Container Instances (ACI) or Pipelines targets
 
 ## Keyboard Shortcuts
 
@@ -93,22 +91,196 @@ Azure deployment wizard:
 | `Ctrl+D` / `Ctrl+U` | Page down/up |
 | `g` / `G` | Go to top/bottom |
 
-## Code Style Guidelines
+## Go Style
 
-- **Go version**: 1.25+
-- **Package**: Single `main` package with clear file separation
-- **Naming**: Camel case; exported functions start uppercase
-- **Error handling**: Check errors with `if err != nil`; graceful degradation preferred
-- **Concurrency**: Use goroutines with channels for async operations
-- **Testing**: Tests in same package with `_test.go` suffix
-- **Env gating**: Use environment variables for integration tests (`MCP_TEST_ENABLED`)
+### Formatting
 
-### Patterns Used
+- Run `gofmt` before committing
+- Imports: stdlib, then external, then internal (blank lines between groups)
 
-- **Builders**: Complex object construction (config, styles)
-- **Map-based lookups**: Metadata and action handlers
+```go
+import (
+    "context"
+    "fmt"
+
+    tea "github.com/charmbracelet/bubbletea"
+    "github.com/charmbracelet/lipgloss"
+
+    "github.com/htelsiz/skitz/internal/config"
+)
+```
+
+### Naming
+
+**Packages**: short, lowercase, no underscores, match directory name
+
+```go
+package config
+package mcp
+```
+
+**Avoid repetition** - don't repeat package name in exports
+
+```go
+func Load() Config { ... }  // config.Load()
+```
+
+**Interfaces**: `-er` suffix for single-method; no redundant prefixes
+
+```go
+type Reader interface { Read(p []byte) (n int, err error) }
+type Storage interface { ... }
+```
+
+**Locks**: named `lock`, never embedded
+
+```go
+type Cache struct {
+    lock sync.Mutex
+    data map[string]string
+}
+```
+
+### Error Handling
+
+**Wrap with context** using `%w`
+
+```go
+if err := db.Connect(ctx); err != nil {
+    return fmt.Errorf("failed to connect to database: %w", err)
+}
+```
+
+**Sentinel errors** for expected conditions
+
+```go
+var ErrNotFound = errors.New("not found")
+
+if errors.Is(err, ErrNotFound) { ... }
+```
+
+### Functions
+
+**Keep functions focused** - split by responsibility
+
+```go
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+    switch msg := msg.(type) {
+    case tea.KeyMsg:
+        return m.handleKey(msg)
+    case tickMsg:
+        return m.handleTick(msg)
+    }
+    return m, nil
+}
+```
+
+**Accept interfaces, return concrete types**
+
+```go
+func NewClient(r io.Reader) *Client { ... }
+```
+
+### Structs
+
+**Composite literals** with field names
+
+```go
+cfg := Config{
+    Name:    "default",
+    Timeout: 30 * time.Second,
+}
+```
+
+**Zero values** with `var`
+
+```go
+var buf bytes.Buffer
+var coords Point
+```
+
+### Testing
+
+**Table-driven tests**
+
+```go
+func TestParse(t *testing.T) {
+    tests := []struct {
+        name    string
+        input   string
+        want    int
+        wantErr bool
+    }{
+        {name: "valid", input: "42", want: 42},
+        {name: "negative", input: "-1", want: -1},
+        {name: "invalid", input: "abc", wantErr: true},
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got, err := Parse(tt.input)
+            if (err != nil) != tt.wantErr {
+                t.Errorf("Parse(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+                return
+            }
+            if got != tt.want {
+                t.Errorf("Parse(%q) = %v, want %v", tt.input, got, tt.want)
+            }
+        })
+    }
+}
+```
+
+**Test helpers** call `t.Helper()`
+
+```go
+func mustLoadFixture(t *testing.T, path string) []byte {
+    t.Helper()
+    data, err := os.ReadFile(path)
+    if err != nil {
+        t.Fatalf("failed to load fixture %s: %v", path, err)
+    }
+    return data
+}
+```
+
+### Concurrency
+
+**Channel direction** - specify when possible
+
+```go
+func producer(out chan<- int) { ... }
+func consumer(in <-chan int) { ... }
+```
+
+**Goroutines must be cancellable**
+
+```go
+func watch(ctx context.Context) {
+    go func() {
+        for {
+            select {
+            case <-ctx.Done():
+                return
+            case event := <-events:
+                handle(event)
+            }
+        }
+    }()
+}
+```
+
+### Package Organization
+
+- `internal/` for private packages
+- Group related types in same file
+- Split large packages by domain (`client.go`, `server.go`, `types.go`)
+- Name packages by function, not `util`
+
+### Patterns
+
 - **Elm architecture**: BubbleTea's Update/View/Init pattern
-- **Spring physics**: Harmonica for quote animations
+- **Map-based lookups**: Metadata and action handlers
 
 ## Available Resources
 
