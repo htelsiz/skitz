@@ -1,0 +1,11 @@
+# Fast-Agent Verifier Configuration
+default_model: sonnet
+
+logger:
+  progress_display: true
+  
+mcp:
+  servers:
+    fetch:
+      command: uvx
+      args: ["mcp-server-fetch"]
