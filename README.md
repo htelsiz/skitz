@@ -12,7 +12,7 @@
 ## ⚡️ Quick Start
 
 ```bash
-git clone https://github.com/htelsiz/skitz.git && cd skitz && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/htelsiz/skitz/main/install.sh | bash
 ```
 
 Then run:
@@ -20,6 +20,18 @@ Then run:
 ```bash
 skitz
 ```
+
+<details>
+<summary>Manual install</summary>
+
+```bash
+git clone https://github.com/htelsiz/skitz.git
+cd skitz
+go build -o skitz ./cmd/skitz/
+sudo mv skitz /usr/local/bin/
+```
+
+</details>
 
 ---
 
