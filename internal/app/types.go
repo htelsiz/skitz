@@ -44,6 +44,20 @@ type PreferencesWizard struct {
 	Editor string
 }
 
+// ProvidersWizard holds state for the Configure Providers wizard
+type ProvidersWizard struct {
+	Step         int       // 0=menu, 1=provider form, 2=set default
+	Action       string    // "add", "edit:name", "remove:name", "default"
+	InputForm    *huh.Form
+	// Provider fields
+	ProviderType string // "openai", "anthropic", "ollama", "custom"
+	Name         string
+	APIKey       string
+	BaseURL      string
+	DefaultModel string
+	Enabled      bool
+}
+
 // section represents a documentation section within a resource
 type section struct {
 	title   string

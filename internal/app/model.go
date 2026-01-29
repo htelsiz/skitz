@@ -38,11 +38,12 @@ type model struct {
 	currentView int // viewDashboard or viewDetail
 
 	// Dashboard tabs
-	dashboardTab         int               // 0=Resources, 1=Actions
-	actionItems          []DashboardAction // Available actions
-	actionCursor         int               // Selected action
+	dashboardTab         int                // 0=Resources, 1=Actions
+	actionItems          []DashboardAction  // Available actions
+	actionCursor         int                // Selected action
 	addResourceWizard    *AddResourceWizard  // Add Resource wizard state
 	preferencesWizard    *PreferencesWizard  // Preferences wizard state
+	providersWizard      *ProvidersWizard    // Configure Providers wizard state
 	pendingResourceReload bool               // Reload resources after editor closes
 	pendingConfigReload   bool               // Reload config after editor closes
 
@@ -170,6 +171,15 @@ func (m *model) buildDashboardActions() []DashboardAction {
 			Description: "Create a new resource file",
 			Handler: func(m *model) tea.Cmd {
 				return m.startAddResourceWizard()
+			},
+		},
+		{
+			ID:          "providers",
+			Name:        "Configure Providers",
+			Icon:        "◈",
+			Description: "Set up LLM providers",
+			Handler: func(m *model) tea.Cmd {
+				return m.startProvidersWizard()
 			},
 		},
 		{
@@ -525,6 +535,307 @@ func (m *model) openConfigInEditor() tea.Cmd {
 		Command: fmt.Sprintf("%s %q", editor, configPath),
 		Mode:    CommandInteractive,
 	})
+}
+
+// startProvidersWizard begins the Configure Providers wizard
+func (m *model) startProvidersWizard() tea.Cmd {
+	m.providersWizard = &ProvidersWizard{
+		Step:    0,
+		Enabled: true,
+	}
+	return m.buildProvidersForm()
+}
+
+// buildProvidersForm creates the form for the current providers step
+func (m *model) buildProvidersForm() tea.Cmd {
+	wizard := m.providersWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0: // Main menu
+		var options []huh.Option[string]
+		options = append(options, huh.NewOption("Add Provider", "add"))
+
+		// List existing providers
+		for _, p := range m.config.AI.Providers {
+			status := "disabled"
+			if p.Enabled {
+				status = "enabled"
+			}
+			if p.Name == m.config.AI.DefaultProvider {
+				status = "default"
+			}
+			options = append(options, huh.NewOption(fmt.Sprintf("Edit: %s (%s)", p.Name, status), "edit:"+p.Name))
+			options = append(options, huh.NewOption(fmt.Sprintf("Remove: %s", p.Name), "remove:"+p.Name))
+		}
+
+		if len(m.config.AI.Providers) > 0 {
+			options = append(options, huh.NewOption("Set Default Provider", "default"))
+		}
+
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Configure Providers").
+					Description("Manage your LLM provider connections").
+					Options(options...).
+					Value(&wizard.Action),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 1: // Provider type selection (for new provider)
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Provider Type").
+					Description("Select the LLM provider").
+					Options(
+						huh.NewOption("OpenAI", "openai"),
+						huh.NewOption("Anthropic", "anthropic"),
+						huh.NewOption("Ollama (Local)", "ollama"),
+						huh.NewOption("OpenAI Compatible", "openai-compatible"),
+					).
+					Value(&wizard.ProviderType),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 2: // Provider details form
+		var fields []huh.Field
+
+		fields = append(fields,
+			huh.NewInput().
+				Title("Name").
+				Description("A friendly name for this provider").
+				Placeholder(wizard.ProviderType).
+				Value(&wizard.Name),
+		)
+
+		// API key for cloud providers
+		if wizard.ProviderType != "ollama" {
+			fields = append(fields,
+				huh.NewInput().
+					Title("API Key").
+					Description("Your API key (stored locally)").
+					EchoMode(huh.EchoModePassword).
+					Value(&wizard.APIKey),
+			)
+		}
+
+		// Base URL for custom/ollama
+		if wizard.ProviderType == "ollama" || wizard.ProviderType == "openai-compatible" {
+			placeholder := "http://localhost:11434"
+			if wizard.ProviderType == "openai-compatible" {
+				placeholder = "https://api.example.com/v1"
+			}
+			fields = append(fields,
+				huh.NewInput().
+					Title("Base URL").
+					Description("API endpoint URL").
+					Placeholder(placeholder).
+					Value(&wizard.BaseURL),
+			)
+		}
+
+		// Default model
+		modelPlaceholder := "gpt-4"
+		switch wizard.ProviderType {
+		case "anthropic":
+			modelPlaceholder = "claude-sonnet-4-20250514"
+		case "ollama":
+			modelPlaceholder = "llama3"
+		}
+		fields = append(fields,
+			huh.NewInput().
+				Title("Default Model").
+				Description("Model to use by default").
+				Placeholder(modelPlaceholder).
+				Value(&wizard.DefaultModel),
+		)
+
+		fields = append(fields,
+			huh.NewConfirm().
+				Title("Enabled").
+				Description("Enable this provider").
+				Value(&wizard.Enabled),
+		)
+
+		wizard.InputForm = huh.NewForm(huh.NewGroup(fields...)).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 3: // Set default provider
+		var options []huh.Option[string]
+		for _, p := range m.config.AI.Providers {
+			if p.Enabled {
+				label := p.Name
+				if p.Name == m.config.AI.DefaultProvider {
+					label += " (current)"
+				}
+				options = append(options, huh.NewOption(label, p.Name))
+			}
+		}
+
+		if len(options) == 0 {
+			m.providersWizard = nil
+			return m.showNotification("!", "No enabled providers", "error")
+		}
+
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Default Provider").
+					Description("Select the default LLM provider").
+					Options(options...).
+					Value(&wizard.Name),
+			),
+		).
+			WithWidth(80).
+			WithShowHelp(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+	}
+
+	return nil
+}
+
+// nextProvidersStep advances the providers wizard
+func (m *model) nextProvidersStep() tea.Cmd {
+	wizard := m.providersWizard
+	if wizard == nil {
+		return nil
+	}
+
+	switch wizard.Step {
+	case 0: // After menu selection
+		if wizard.Action == "add" {
+			wizard.Step = 1
+			return m.buildProvidersForm()
+		} else if wizard.Action == "default" {
+			wizard.Step = 3
+			return m.buildProvidersForm()
+		} else if strings.HasPrefix(wizard.Action, "edit:") {
+			// Load existing provider data
+			providerName := strings.TrimPrefix(wizard.Action, "edit:")
+			for _, p := range m.config.AI.Providers {
+				if p.Name == providerName {
+					wizard.Name = p.Name
+					wizard.APIKey = p.APIKey
+					wizard.BaseURL = p.BaseURL
+					wizard.DefaultModel = p.DefaultModel
+					wizard.Enabled = p.Enabled
+					// Determine provider type from existing data
+					wizard.ProviderType = "openai-compatible"
+					if strings.Contains(strings.ToLower(p.Name), "openai") || p.BaseURL == "" {
+						wizard.ProviderType = "openai"
+					} else if strings.Contains(strings.ToLower(p.Name), "anthropic") {
+						wizard.ProviderType = "anthropic"
+					} else if strings.Contains(strings.ToLower(p.Name), "ollama") || strings.Contains(p.BaseURL, "11434") {
+						wizard.ProviderType = "ollama"
+					}
+					break
+				}
+			}
+			wizard.Step = 2
+			return m.buildProvidersForm()
+		} else if strings.HasPrefix(wizard.Action, "remove:") {
+			providerName := strings.TrimPrefix(wizard.Action, "remove:")
+			var newProviders []config.ProviderConfig
+			for _, p := range m.config.AI.Providers {
+				if p.Name != providerName {
+					newProviders = append(newProviders, p)
+				}
+			}
+			m.config.AI.Providers = newProviders
+			if m.config.AI.DefaultProvider == providerName {
+				m.config.AI.DefaultProvider = ""
+			}
+			config.Save(m.config)
+			m.providersWizard = nil
+			return m.showNotification("✓", "Removed "+providerName, "success")
+		}
+
+	case 1: // After provider type selection
+		// Set defaults based on provider type
+		if wizard.Name == "" {
+			wizard.Name = wizard.ProviderType
+		}
+		switch wizard.ProviderType {
+		case "ollama":
+			if wizard.BaseURL == "" {
+				wizard.BaseURL = "http://localhost:11434"
+			}
+		case "anthropic":
+			if wizard.DefaultModel == "" {
+				wizard.DefaultModel = "claude-sonnet-4-20250514"
+			}
+		case "openai":
+			if wizard.DefaultModel == "" {
+				wizard.DefaultModel = "gpt-4"
+			}
+		}
+		wizard.Step = 2
+		return m.buildProvidersForm()
+
+	case 2: // After provider details form
+		if wizard.Name == "" {
+			wizard.Name = wizard.ProviderType
+		}
+
+		newProvider := config.ProviderConfig{
+			Name:         wizard.Name,
+			APIKey:       wizard.APIKey,
+			BaseURL:      wizard.BaseURL,
+			DefaultModel: wizard.DefaultModel,
+			Enabled:      wizard.Enabled,
+		}
+
+		// Check if editing existing or adding new
+		found := false
+		if strings.HasPrefix(wizard.Action, "edit:") {
+			oldName := strings.TrimPrefix(wizard.Action, "edit:")
+			for i, p := range m.config.AI.Providers {
+				if p.Name == oldName {
+					m.config.AI.Providers[i] = newProvider
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			m.config.AI.Providers = append(m.config.AI.Providers, newProvider)
+		}
+
+		// Set as default if it's the first provider
+		if len(m.config.AI.Providers) == 1 && newProvider.Enabled {
+			m.config.AI.DefaultProvider = newProvider.Name
+		}
+
+		config.Save(m.config)
+		m.providersWizard = nil
+		return m.showNotification("✓", "Provider saved: "+wizard.Name, "success")
+
+	case 3: // After default provider selection
+		m.config.AI.DefaultProvider = wizard.Name
+		config.Save(m.config)
+		m.providersWizard = nil
+		return m.showNotification("✓", "Default provider: "+wizard.Name, "success")
+	}
+
+	m.providersWizard = nil
+	return nil
 }
 
 // Helper function for preferences wizard
@@ -918,6 +1229,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.preferencesWizard.InputForm = f
 				if f.State == huh.StateCompleted {
 					return m, m.nextPreferencesStep()
+				}
+			}
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+
+	// Forward non-key messages to providers wizard form
+	if m.providersWizard != nil && m.providersWizard.InputForm != nil {
+		if _, isKey := msg.(tea.KeyMsg); !isKey {
+			form, cmd := m.providersWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.providersWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextProvidersStep()
 				}
 			}
 			if cmd != nil {
@@ -1472,6 +1799,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.preferencesWizard.InputForm = f
 				if f.State == huh.StateCompleted {
 					return m, m.nextPreferencesStep()
+				}
+			}
+			return m, cmd
+		}
+
+		// Handle Providers wizard form if active
+		if m.providersWizard != nil && m.providersWizard.InputForm != nil {
+			switch keyStr {
+			case "esc":
+				m.providersWizard = nil
+				return m, nil
+			}
+
+			form, cmd := m.providersWizard.InputForm.Update(msg)
+			if f, ok := form.(*huh.Form); ok {
+				m.providersWizard.InputForm = f
+				if f.State == huh.StateCompleted {
+					return m, m.nextProvidersStep()
 				}
 			}
 			return m, cmd

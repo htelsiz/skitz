@@ -65,7 +65,17 @@ type HistoryConfig struct {
 }
 
 type AIConfig struct {
-	OpenAIAPIKey string `yaml:"openai_api_key,omitempty"`
+	OpenAIAPIKey    string           `yaml:"openai_api_key,omitempty"` // deprecated, use Providers
+	DefaultProvider string           `yaml:"default_provider,omitempty"`
+	Providers       []ProviderConfig `yaml:"providers,omitempty"`
+}
+
+type ProviderConfig struct {
+	Name         string `yaml:"name"`          // e.g., "openai", "anthropic", "ollama"
+	APIKey       string `yaml:"api_key,omitempty"`
+	BaseURL      string `yaml:"base_url,omitempty"` // for custom endpoints
+	DefaultModel string `yaml:"default_model,omitempty"`
+	Enabled      bool   `yaml:"enabled"`
 }
 
 type MCPConfig struct {

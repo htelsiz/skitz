@@ -173,6 +173,53 @@ func (m model) renderActionsTab(width, height int) string {
 			wizardStyle.Render(wizardContent))
 	}
 
+	// If providers wizard is active, show wizard form
+	if m.providersWizard != nil && m.providersWizard.InputForm != nil {
+		wizardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39")). // Blue for providers
+			Padding(1, 2).
+			Width(width - 10).
+			Align(lipgloss.Center)
+
+		var title string
+		switch m.providersWizard.Step {
+		case 0:
+			title = "Configure Providers"
+		case 1:
+			title = "Select Provider Type"
+		case 2:
+			if strings.HasPrefix(m.providersWizard.Action, "edit:") {
+				title = "Edit Provider"
+			} else {
+				title = "Add Provider"
+			}
+		case 3:
+			title = "Set Default Provider"
+		}
+
+		header := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true).
+			Render("◈ " + title)
+
+		formView := m.providersWizard.InputForm.View()
+
+		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			header,
+			"",
+			formView,
+			"",
+			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
+			"",
+		)
+
+		return lipgloss.Place(width, height,
+			lipgloss.Center, lipgloss.Center,
+			wizardStyle.Render(wizardContent))
+	}
+
 	titleStyle := lipgloss.NewStyle().
 		Foreground(secondary).
 		Bold(true)
@@ -377,6 +424,41 @@ func (m model) renderDashboard() string {
 				favDisplay = favDisplay[:15] + "..."
 			}
 			sidebarLines = append(sidebarLines, actionItemStyle.Render("  "+favDisplay))
+		}
+	}
+
+	// Providers section
+	sidebarLines = append(sidebarLines, "", actionsTitleStyle.Render("◈ Providers"))
+	if len(m.config.AI.Providers) == 0 {
+		sidebarLines = append(sidebarLines, actionDimStyle.Render("  No providers"))
+		sidebarLines = append(sidebarLines, actionDimStyle.Render("  Actions → Configure"))
+	} else {
+		providerColor := lipgloss.Color("39")
+		for _, p := range m.config.AI.Providers {
+			icon := "○"
+			statusStyle := actionDimStyle
+			if p.Enabled {
+				icon = "●"
+				statusStyle = lipgloss.NewStyle().Foreground(providerColor)
+			}
+			if p.Name == m.config.AI.DefaultProvider {
+				icon = "◆"
+				statusStyle = lipgloss.NewStyle().Foreground(providerColor).Bold(true)
+			}
+
+			name := p.Name
+			if len(name) > 16 {
+				name = name[:13] + "..."
+			}
+			sidebarLines = append(sidebarLines, statusStyle.Render(fmt.Sprintf("  %s %s", icon, name)))
+		}
+
+		// Show default agent
+		if m.config.AI.DefaultProvider != "" {
+			sidebarLines = append(sidebarLines, "")
+			agentStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
+			sidebarLines = append(sidebarLines, agentStyle.Render("  ⚡ skitz-agent"))
+			sidebarLines = append(sidebarLines, actionDimStyle.Render(fmt.Sprintf("    using %s", m.config.AI.DefaultProvider)))
 		}
 	}
 
