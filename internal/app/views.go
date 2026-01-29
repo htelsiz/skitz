@@ -268,7 +268,7 @@ func (m model) renderActionsTab(width, height int) string {
 			Width(width - 10).
 			Align(lipgloss.Center)
 
-		stepLabels := []string{"Select Runtime", "Configure Agent", "Confirm"}
+		stepLabels := []string{"Select Provider", "Select Runtime", "Configure Agent", "Confirm"}
 		stepLabel := ""
 		if m.runAgentWizard.Step < len(stepLabels) {
 			stepLabel = stepLabels[m.runAgentWizard.Step]

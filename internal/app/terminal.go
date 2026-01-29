@@ -7,6 +7,20 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// renderTerminalFullscreen renders the terminal taking the full screen
+func (m model) renderTerminalFullscreen() string {
+	termPane := m.renderTerminalPane()
+	
+	// Pad to fill screen
+	termH := lipgloss.Height(termPane)
+	if termH < m.height {
+		padding := strings.Repeat("\n", m.height-termH-1)
+		termPane = termPane + padding
+	}
+	
+	return termPane
+}
+
 // renderTerminalPane renders the embedded terminal pane
 func (m model) renderTerminalPane() string {
 	if !m.term.active {

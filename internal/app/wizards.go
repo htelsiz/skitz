@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -817,10 +818,23 @@ func (m *model) confirmDeleteResource() tea.Cmd {
 // Run Agent Wizard
 
 func (m *model) startRunAgentWizard() tea.Cmd {
+	// Check if any providers are configured
+	var enabledProviders []config.ProviderConfig
+	for _, p := range m.config.AI.Providers {
+		if p.Enabled {
+			enabledProviders = append(enabledProviders, p)
+		}
+	}
+
+	if len(enabledProviders) == 0 {
+		return m.showNotification("!", "No providers configured. Go to Configure Providers first.", "error")
+	}
+
 	m.runAgentWizard = &RunAgentWizard{
-		Step:    0,
-		Runtime: "docker",
-		Image:   "python:3.11-slim",
+		Step:     0,
+		Provider: m.config.AI.DefaultProvider,
+		Runtime:  "docker",
+		Image:    "skitz-fastagent",
 	}
 	return m.buildRunAgentForm()
 }
@@ -833,6 +847,35 @@ func (m *model) buildRunAgentForm() tea.Cmd {
 
 	switch wizard.Step {
 	case 0:
+		// Step 0: Select provider
+		var options []huh.Option[string]
+		for _, p := range m.config.AI.Providers {
+			if p.Enabled {
+				label := p.Name
+				if p.Name == m.config.AI.DefaultProvider {
+					label += " (default)"
+				}
+				options = append(options, huh.NewOption(label, p.Name))
+			}
+		}
+
+		wizard.InputForm = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Provider").
+					Description("Which AI provider should the agent use?").
+					Options(options...).
+					Value(&wizard.Provider),
+			),
+		).
+			WithWidth(60).
+			WithShowHelp(true).
+			WithShowErrors(true).
+			WithTheme(huh.ThemeCatppuccin())
+		return wizard.InputForm.Init()
+
+	case 1:
+		// Step 1: Select runtime
 		wizard.InputForm = huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
@@ -851,7 +894,8 @@ func (m *model) buildRunAgentForm() tea.Cmd {
 			WithTheme(huh.ThemeCatppuccin())
 		return wizard.InputForm.Init()
 
-	case 1:
+	case 2:
+		// Step 2: Configure agent
 		var fields []huh.Field
 
 		fields = append(fields,
@@ -861,8 +905,8 @@ func (m *model) buildRunAgentForm() tea.Cmd {
 				Placeholder("my-agent").
 				Value(&wizard.AgentName),
 			huh.NewText().
-				Title("Task").
-				Description("What should the agent do?").
+				Title("Prompt").
+				Description("What should the agent do? (sent directly to the AI)").
 				Placeholder("Analyze the code and suggest improvements...").
 				CharLimit(2000).
 				Value(&wizard.Task),
@@ -872,8 +916,8 @@ func (m *model) buildRunAgentForm() tea.Cmd {
 			fields = append(fields,
 				huh.NewInput().
 					Title("Docker Image").
-					Description("Base image to use").
-					Placeholder("python:3.11-slim").
+					Description("Image with fast-agent (build with: docker build -t skitz-fastagent docker/fastagent)").
+					Placeholder("skitz-fastagent").
 					Value(&wizard.Image),
 			)
 		}
@@ -885,14 +929,16 @@ func (m *model) buildRunAgentForm() tea.Cmd {
 			WithTheme(huh.ThemeCatppuccin())
 		return wizard.InputForm.Init()
 
-	case 2:
+	case 3:
+		// Step 3: Confirm
 		wizard.InputForm = huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Run Agent?").
-					Description(fmt.Sprintf("Run '%s' using %s?", wizard.AgentName, wizard.Runtime)).
+					Description(fmt.Sprintf("Run '%s' with %s using %s?", wizard.AgentName, wizard.Provider, wizard.Runtime)).
 					Affirmative("Run").
-					Negative("Cancel"),
+					Negative("Cancel").
+					Value(&wizard.Confirmed),
 			),
 		).
 			WithWidth(60).
@@ -912,7 +958,7 @@ func (m *model) nextRunAgentStep() tea.Cmd {
 	}
 
 	wizard.Step++
-	if wizard.Step > 2 {
+	if wizard.Step > 3 {
 		return m.executeRunAgent()
 	}
 
@@ -922,8 +968,30 @@ func (m *model) nextRunAgentStep() tea.Cmd {
 func (m *model) executeRunAgent() tea.Cmd {
 	wizard := m.runAgentWizard
 	if wizard == nil {
+		log.Println("executeRunAgent: wizard is nil")
+		return nil
+	}
+
+	log.Printf("executeRunAgent: confirmed=%v runtime=%s agent=%s provider=%s", wizard.Confirmed, wizard.Runtime, wizard.AgentName, wizard.Provider)
+
+	if !wizard.Confirmed {
+		log.Println("executeRunAgent: not confirmed, cancelling")
 		m.runAgentWizard = nil
 		return nil
+	}
+
+	// Find the selected provider
+	var provider *config.ProviderConfig
+	for _, p := range m.config.AI.Providers {
+		if p.Name == wizard.Provider {
+			provider = &p
+			break
+		}
+	}
+
+	if provider == nil {
+		m.runAgentWizard = nil
+		return m.showNotification("!", "Provider not found: "+wizard.Provider, "error")
 	}
 
 	agentName := wizard.AgentName
@@ -933,7 +1001,7 @@ func (m *model) executeRunAgent() tea.Cmd {
 
 	task := wizard.Task
 	if task == "" {
-		task = "echo 'No task specified'"
+		task = "Say hello and introduce yourself."
 	}
 
 	m.runAgentWizard = nil
@@ -945,10 +1013,49 @@ func (m *model) executeRunAgent() tea.Cmd {
 
 		image := wizard.Image
 		if image == "" {
-			image = "python:3.11-slim"
+			image = "astral/uv:python3.12-bookworm-slim"
 		}
 
-		cmd := fmt.Sprintf("docker run --rm --name %s %s /bin/sh -c %q", agentName, image, task)
+		// Determine model and env var based on provider type
+		model := provider.DefaultModel
+		envVar := ""
+		apiKeyValue := provider.APIKey
+
+		// Map common model names to fast-agent compatible names
+		modelMap := map[string]string{
+			"claude-sonnet-4-20250514": "sonnet",
+			"claude-3-5-sonnet":        "sonnet",
+			"claude-3-sonnet":          "sonnet",
+			"claude-3-haiku":           "haiku",
+		}
+		if mapped, ok := modelMap[model]; ok {
+			model = mapped
+		}
+
+		switch provider.ProviderType {
+		case "openai":
+			if model == "" {
+				model = "gpt-5"
+			}
+			envVar = "OPENAI_API_KEY"
+		case "anthropic":
+			if model == "" {
+				model = "sonnet"
+			}
+			envVar = "ANTHROPIC_API_KEY"
+		default:
+			if model == "" {
+				model = "gpt-5"
+			}
+			envVar = "OPENAI_API_KEY"
+		}
+
+		log.Printf("executeRunAgent: using provider=%s type=%s model=%s", provider.Name, provider.ProviderType, model)
+
+		// Use skitz-fastagent image with env vars for prompt and model
+		cmd := fmt.Sprintf(`docker run --rm --name %s -e %s=%s -e AGENT_MODEL=%s -e AGENT_PROMPT=%q %s`,
+			agentName, envVar, apiKeyValue, model, task, image)
+		log.Printf("executeRunAgent: running docker command (key redacted)")
 		return m.runCommand(CommandSpec{
 			Command: cmd,
 			Mode:    CommandEmbedded,

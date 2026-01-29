@@ -371,6 +371,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case termStartMsg:
+		log.Printf("termStartMsg received: command=%s", msg.command)
 		m.term = EmbeddedTerm{
 			active:  true,
 			focused: true,
@@ -623,6 +624,11 @@ func (m *model) waitForTermOutput() tea.Cmd {
 func (m model) View() string {
 	if m.width == 0 {
 		return ""
+	}
+
+	// If embedded terminal is active, show it regardless of view
+	if m.term.active {
+		return m.renderTerminalFullscreen()
 	}
 
 	var content string
