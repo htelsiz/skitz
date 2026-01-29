@@ -20,15 +20,13 @@ Sleep 500ms
 Enter
 Sleep 2s
 
-# Navigate resources
+# Navigate to Docker resource
 Down
 Sleep 500ms
 Down
-Sleep 500ms
-Up
 Sleep 500ms
 
-# Open a resource
+# Open Docker resource
 Enter
 Sleep 2s
 
@@ -37,15 +35,64 @@ Down
 Sleep 400ms
 Down
 Sleep 400ms
+
+# Run command - show running containers
+Enter
+Sleep 2s
+
+# Command executes and shows output
+Sleep 3s
+
+# Go back to dashboard
+Escape
+Sleep 1s
+Escape
+Sleep 1s
+
+# Navigate to Git resource
+Down
+Sleep 500ms
+
+# Open Git resource
+Enter
+Sleep 2s
+
+# Select git log command
 Down
 Sleep 400ms
 
+# Run git log
+Enter
+Sleep 2s
+
+# Show output
+Sleep 3s
+
 # Go back to dashboard
+Escape
+Sleep 1s
 Escape
 Sleep 1s
 
 # Switch to Actions tab
 Tab
+Sleep 1s
+
+# Navigate to Configure Providers
+Down
+Sleep 400ms
+Down
+Sleep 400ms
+
+# Open preferences
+Enter
+Sleep 2s
+
+# Show preferences UI
+Sleep 2s
+
+# Exit preferences
+Escape
 Sleep 1s
 
 # Back to resources
