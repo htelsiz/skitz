@@ -17,7 +17,7 @@ def run_shell_command(command: str) -> str:
         The command output (stdout + stderr) or error message.
     """
     try:
-        print(f"{os.linesep}[Exec] Running: {command}")
+        print(f"\n[Exec] Running: {command}")
         
         result = subprocess.run(
             ["sh", "-c", command],
@@ -26,11 +26,19 @@ def run_shell_command(command: str) -> str:
             timeout=30
         )
         
-        output = result.stdout
+        parts = [
+            f"Exit Code: {result.returncode}",
+            "Output:",
+            result.stdout
+        ]
+        
         if result.stderr:
-            output += f"{os.linesep}STDERR:{os.linesep}{result.stderr}"
+            parts.extend([
+                "STDERR:",
+                result.stderr
+            ])
             
-        return f"Exit Code: {result.returncode}{os.linesep}Output:{os.linesep}{output}"
+        return "\n".join(parts)
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
