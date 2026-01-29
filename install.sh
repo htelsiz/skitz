@@ -36,7 +36,7 @@ TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
 echo "Cloning repository..."
-git clone --depth 1 "$REPO" "$TEMP_DIR" 2>/dev/null
+GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$REPO" "$TEMP_DIR" 2>/dev/null
 
 cd "$TEMP_DIR"
 
