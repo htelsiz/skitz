@@ -100,12 +100,16 @@ type HistoryEntry struct {
 
 // AgentInteraction tracks interactions with AI agents
 type AgentInteraction struct {
+	ID        string    `json:"id"`          // UUID for tracking
 	Agent     string    `json:"agent"`
 	Action    string    `json:"action"`
 	Input     string    `json:"input"`
 	Output    string    `json:"output"`
 	Timestamp time.Time `json:"timestamp"`
 	Success   bool      `json:"success"`
+	Runtime   string    `json:"runtime"`      // "docker", "e2b"
+	Provider  string    `json:"provider"`     // provider name
+	Duration  int64     `json:"duration_ms"`  // execution time in milliseconds
 }
 
 // Load loads the configuration from disk. defaultMCPURL is used when

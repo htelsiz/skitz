@@ -26,6 +26,8 @@ func (m *model) loadResources() {
 		"azure":      "Cloud resource management",
 		"cursor":     "AI-powered code editor",
 		"fast-agent": "MCP-native AI agent framework",
+		"e2b":        "Cloud sandbox for AI agents",
+		"codex":      "OpenAI CLI coding agent",
 	}
 
 	userDir := config.ResourcesDir

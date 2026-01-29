@@ -555,19 +555,133 @@ func (m *model) handleWizardKeys(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// handleAgentsTabKeys handles keyboard input for the Agents tab
+func (m *model) handleAgentsTabKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	keyStr := msg.String()
+
+	// In detail view
+	if m.agentViewMode == 1 {
+		switch keyStr {
+		case "esc", "q":
+			m.agentViewMode = 0
+			m.agentDetailScroll = 0
+			return m, nil
+		case "ctrl+y":
+			// Copy output to clipboard
+			if m.selectedAgentIdx < len(m.agentHistory) {
+				output := m.agentHistory[m.selectedAgentIdx].Output
+				if err := clipboard.WriteAll(output); err != nil {
+					return m, m.showNotification("!", "Copy failed: "+err.Error(), "error")
+				}
+				return m, m.showNotification("", "Output copied to clipboard", "success")
+			}
+			return m, nil
+		case "j", "down":
+			m.agentDetailScroll++
+			return m, nil
+		case "k", "up":
+			if m.agentDetailScroll > 0 {
+				m.agentDetailScroll--
+			}
+			return m, nil
+		case "g":
+			m.agentDetailScroll = 0
+			return m, nil
+		case "G":
+			m.agentDetailScroll = 9999 // Will be clamped in render
+			return m, nil
+		case "ctrl+d", "pgdown":
+			m.agentDetailScroll += 10
+			return m, nil
+		case "ctrl+u", "pgup":
+			m.agentDetailScroll -= 10
+			if m.agentDetailScroll < 0 {
+				m.agentDetailScroll = 0
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// In list view
+	totalItems := len(m.activeAgents) + len(m.agentHistory)
+
+	switch keyStr {
+	case "up", "k":
+		if m.agentCursor > 0 {
+			m.agentCursor--
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.agentCursor < totalItems-1 {
+			m.agentCursor++
+		}
+		return m, nil
+
+	case "enter":
+		// Can only view details for history items, not active agents
+		historyIdx := m.agentCursor - len(m.activeAgents)
+		if historyIdx >= 0 && historyIdx < len(m.agentHistory) {
+			m.selectedAgentIdx = historyIdx
+			m.agentViewMode = 1
+		}
+		return m, nil
+
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		idx := int(keyStr[0] - '1')
+		if idx < totalItems {
+			m.agentCursor = idx
+			// If it's a history item, go to detail view
+			historyIdx := idx - len(m.activeAgents)
+			if historyIdx >= 0 && historyIdx < len(m.agentHistory) {
+				m.selectedAgentIdx = historyIdx
+				m.agentViewMode = 1
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
 // handleDashboardKeys handles keyboard input in the dashboard view
 func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Route to agents tab handler if on agents tab (except for global keys)
+	if m.dashboardTab == 2 {
+		keyStr := msg.String()
+		// Handle global keys first
+		switch keyStr {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		case "tab", "shift+tab":
+			if keyStr == "tab" {
+				m.dashboardTab = (m.dashboardTab + 1) % 3
+			} else {
+				m.dashboardTab = (m.dashboardTab + 2) % 3
+			}
+			m.agentCursor = 0
+			m.agentViewMode = 0
+			return m, nil
+		default:
+			return m.handleAgentsTabKeys(msg)
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
 	case "tab", "shift+tab":
-		// Switch between Resources and Actions tabs
+		// Switch between Resources, Actions, and Agents tabs
 		if msg.String() == "tab" {
-			m.dashboardTab = (m.dashboardTab + 1) % 2
+			m.dashboardTab = (m.dashboardTab + 1) % 3
 		} else {
-			m.dashboardTab = (m.dashboardTab + 1) % 2
+			m.dashboardTab = (m.dashboardTab + 2) % 3 // Go backwards
 		}
+		// Reset cursors when switching tabs
+		m.agentCursor = 0
+		m.agentViewMode = 0
 		return m, nil
 
 	case "enter":
@@ -576,7 +690,7 @@ func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = viewDetail
 			m.secCursor = 0
 			m.initViewComponents()
-		} else {
+		} else if m.dashboardTab == 1 {
 			// Actions tab - execute action
 			if len(m.actionItems) > 0 && m.actionCursor < len(m.actionItems) {
 				action := m.actionItems[m.actionCursor]
@@ -606,7 +720,7 @@ func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.resCursor > 0 {
 				m.resCursor--
 			}
-		} else {
+		} else if m.dashboardTab == 1 {
 			if m.actionCursor > 0 {
 				m.actionCursor--
 			}
@@ -617,7 +731,7 @@ func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.resCursor < len(m.resources)-1 {
 				m.resCursor++
 			}
-		} else {
+		} else if m.dashboardTab == 1 {
 			if m.actionCursor < len(m.actionItems)-1 {
 				m.actionCursor++
 			}
@@ -632,7 +746,7 @@ func (m *model) handleDashboardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.secCursor = 0
 				m.initViewComponents()
 			}
-		} else {
+		} else if m.dashboardTab == 1 {
 			if idx < len(m.actionItems) {
 				m.actionCursor = idx
 				action := m.actionItems[m.actionCursor]

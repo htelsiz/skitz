@@ -8,82 +8,33 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// renderDashboardTabs renders the tab bar for Resources/Actions
+// renderDashboardTabs renders the tab bar for Resources/Actions/Agents
 func (m model) renderDashboardTabs(width int) string {
-	tabs := []string{"RESOURCES", "ACTIONS"}
+	tabs := []string{"RESOURCES", "ACTIONS", "AGENTS"}
 
-	var tabRow1, tabRow2, tabRow3 []string
+	var tabParts []string
 
 	for i, title := range tabs {
-		label := fmt.Sprintf("  %s  ", title)
-		labelW := len(label)
-
 		if i == m.dashboardTab {
-			// Active tab - bold borders, purple accent, filled background
-			topBorder := lipgloss.NewStyle().
+			// Active tab - highlighted text with underline
+			tabStyle := lipgloss.NewStyle().
 				Foreground(primary).
-				Render("┏" + strings.Repeat("━", labelW) + "┓")
-
-			content := lipgloss.NewStyle().
-				Foreground(primary).
-				Render("┃") +
-				lipgloss.NewStyle().
-					Background(primary).
-					Foreground(lipgloss.Color("255")).
-					Bold(true).
-					Render(label) +
-				lipgloss.NewStyle().
-					Foreground(primary).
-					Render("┃")
-
-			bottomBorder := lipgloss.NewStyle().
-				Foreground(primary).
-				Render("┗" + strings.Repeat("━", labelW) + "┛")
-
-			tabRow1 = append(tabRow1, topBorder)
-			tabRow2 = append(tabRow2, content)
-			tabRow3 = append(tabRow3, bottomBorder)
+				Bold(true).
+				Underline(true).
+				Padding(0, 2)
+			tabParts = append(tabParts, tabStyle.Render(title))
 		} else {
-			// Inactive tab - light borders, dim color
-			topBorder := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240")).
-				Render("┌" + strings.Repeat("─", labelW) + "┐")
-
-			content := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240")).
-				Render("│") +
-				lipgloss.NewStyle().
-					Foreground(lipgloss.Color("248")).
-					Render(label) +
-				lipgloss.NewStyle().
-					Foreground(lipgloss.Color("240")).
-					Render("│")
-
-			bottomBorder := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240")).
-				Render("└" + strings.Repeat("─", labelW) + "┘")
-
-			tabRow1 = append(tabRow1, topBorder)
-			tabRow2 = append(tabRow2, content)
-			tabRow3 = append(tabRow3, bottomBorder)
-		}
-
-		if i < len(tabs)-1 {
-			tabRow1 = append(tabRow1, "   ")
-			tabRow2 = append(tabRow2, "   ")
-			tabRow3 = append(tabRow3, "   ")
+			// Inactive tab - dim text
+			tabStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245")).
+				Padding(0, 2)
+			tabParts = append(tabParts, tabStyle.Render(title))
 		}
 	}
 
-	row1 := strings.Join(tabRow1, "")
-	row2 := strings.Join(tabRow2, "")
-	row3 := strings.Join(tabRow3, "")
+	tabRow := strings.Join(tabParts, "  ")
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().PaddingLeft(1).Render(row1),
-		lipgloss.NewStyle().PaddingLeft(1).Render(row2),
-		lipgloss.NewStyle().PaddingLeft(1).Render(row3),
-	)
+	return lipgloss.NewStyle().PaddingLeft(1).PaddingBottom(1).Render(tabRow)
 }
 
 // renderActionsTab renders the list of available actions
@@ -330,6 +281,241 @@ func (m model) renderActionsTab(width, height int) string {
 	)
 
 	return lipgloss.NewStyle().Padding(0, 2).Render(content)
+}
+
+// renderAgentsTab renders the agents tab with active agents and history
+func (m model) renderAgentsTab(width, height int) string {
+	// Detail view
+	if m.agentViewMode == 1 && m.selectedAgentIdx < len(m.agentHistory) {
+		return m.renderAgentDetail(width, height)
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true)
+
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(subtle).
+		Italic(true)
+
+	var sections []string
+
+	// Active Agents section
+	if len(m.activeAgents) > 0 {
+		activeTitle := titleStyle.Render("Active Agents")
+		var activeItems []CardItem
+		for i, agent := range m.activeAgents {
+			elapsed := time.Since(agent.StartTime).Round(time.Second)
+			activeItems = append(activeItems, CardItem{
+				Title:       agent.Name,
+				Subtitle:    fmt.Sprintf("%s | %s | %s", agent.Provider, agent.Runtime, elapsed),
+				Tag:         "RUNNING",
+				TagColor:    lipgloss.Color("220"),
+				BorderColor: lipgloss.Color("220"),
+				Shortcut:    i + 1,
+			})
+		}
+		activeGrid := CardGrid(activeItems, width, -1) // No selection in active agents
+		sections = append(sections, "", activeTitle, "", activeGrid)
+	}
+
+	// Agent History section
+	historyTitle := titleStyle.Render("Agent History")
+
+	if len(m.agentHistory) == 0 {
+		emptyMsg := subtitleStyle.Render("No agent runs yet. Use Actions > Run Agent to start.")
+		sections = append(sections, "", historyTitle, "", emptyMsg)
+	} else {
+		var historyItems []CardItem
+		for i, entry := range m.agentHistory {
+			statusIcon := "+"
+			tagColor := lipgloss.Color("114")
+			if !entry.Success {
+				statusIcon = "x"
+				tagColor = lipgloss.Color("196")
+			}
+
+			subtitle := formatTimeAgo(entry.Timestamp)
+			if entry.Duration > 0 {
+				subtitle += fmt.Sprintf(" | %dms", entry.Duration)
+			}
+			if entry.Runtime != "" {
+				subtitle += " | " + entry.Runtime
+			}
+
+			action := entry.Action
+			if len(action) > 40 {
+				action = action[:37] + "..."
+			}
+
+			historyItems = append(historyItems, CardItem{
+				Title:       entry.Agent,
+				Subtitle:    subtitle,
+				Tag:         statusIcon,
+				TagColor:    tagColor,
+				BorderColor: tagColor,
+				Shortcut:    i + 1,
+			})
+		}
+
+		// Calculate cursor position for history (offset by active agents count)
+		historyCursor := m.agentCursor - len(m.activeAgents)
+		if historyCursor < 0 {
+			historyCursor = -1
+		}
+		historyGrid := CardGrid(historyItems, width, historyCursor)
+		sections = append(sections, "", historyTitle, "", historyGrid)
+	}
+
+	// Info text
+	infoStyle := lipgloss.NewStyle().
+		Foreground(subtle).
+		Italic(true)
+
+	info := infoStyle.Render("Select an entry and press Enter to view details")
+	sections = append(sections, "", info)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return lipgloss.NewStyle().Padding(0, 2).Render(content)
+}
+
+// renderAgentDetail renders the detail view for a selected agent interaction
+func (m model) renderAgentDetail(width, height int) string {
+	if m.selectedAgentIdx >= len(m.agentHistory) {
+		return ""
+	}
+
+	entry := m.agentHistory[m.selectedAgentIdx]
+
+	// Styles
+	titleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true)
+
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Bold(true)
+
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(subtle)
+
+	// Status icon
+	statusIcon := "+"
+	statusColor := lipgloss.Color("114")
+	statusText := "Success"
+	if !entry.Success {
+		statusIcon = "x"
+		statusColor = lipgloss.Color("196")
+		statusText = "Failed"
+	}
+	statusStyle := lipgloss.NewStyle().Foreground(statusColor).Bold(true)
+
+	// Build all content lines first
+	var allLines []string
+
+	// Header with name and status
+	header := titleStyle.Render(entry.Agent) + "  " + statusStyle.Render(statusIcon+" "+statusText)
+	allLines = append(allLines, header, "")
+
+	// Metadata grid
+	allLines = append(allLines, labelStyle.Render("Provider: ")+valueStyle.Render(entry.Provider))
+	allLines = append(allLines, labelStyle.Render("Runtime:  ")+valueStyle.Render(entry.Runtime))
+	allLines = append(allLines, labelStyle.Render("Time:     ")+valueStyle.Render(entry.Timestamp.Format("2006-01-02 15:04:05")))
+	if entry.Duration > 0 {
+		allLines = append(allLines, labelStyle.Render("Duration: ")+valueStyle.Render(fmt.Sprintf("%dms", entry.Duration)))
+	}
+	allLines = append(allLines, "")
+
+	// Input/Task section
+	allLines = append(allLines, labelStyle.Render("Task/Prompt:"))
+	inputLines := strings.Split(entry.Input, "\n")
+	for _, line := range inputLines {
+		allLines = append(allLines, "  "+valueStyle.Render(line))
+	}
+	allLines = append(allLines, "")
+
+	// Output section - include all lines
+	allLines = append(allLines, labelStyle.Render("Output:"))
+	if entry.Output == "" {
+		allLines = append(allLines, dimStyle.Render("  (no output)"))
+	} else {
+		outputLines := strings.Split(entry.Output, "\n")
+		for _, line := range outputLines {
+			if len(line) > width-14 {
+				line = line[:width-17] + "..."
+			}
+			allLines = append(allLines, "  "+valueStyle.Render(line))
+		}
+	}
+
+	// Calculate visible area (leave room for hints and border)
+	visibleHeight := height - 6
+	if visibleHeight < 5 {
+		visibleHeight = 5
+	}
+
+	// Apply scroll offset
+	totalLines := len(allLines)
+	maxScroll := totalLines - visibleHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	scrollOffset := m.agentDetailScroll
+	if scrollOffset > maxScroll {
+		scrollOffset = maxScroll
+	}
+	if scrollOffset < 0 {
+		scrollOffset = 0
+	}
+
+	// Get visible lines
+	endIdx := scrollOffset + visibleHeight
+	if endIdx > totalLines {
+		endIdx = totalLines
+	}
+
+	var visibleLines []string
+	if scrollOffset < totalLines {
+		visibleLines = allLines[scrollOffset:endIdx]
+	}
+
+	// Add scroll indicator if needed
+	scrollInfo := ""
+	if totalLines > visibleHeight {
+		scrollInfo = dimStyle.Render(fmt.Sprintf(" [%d-%d of %d] ", scrollOffset+1, endIdx, totalLines))
+	}
+
+	// Key hints
+	hintStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("236")).
+		Padding(0, 1)
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("213")).
+		Bold(true)
+
+	hints := hintStyle.Render(
+		keyStyle.Render("j/k") + dimStyle.Render(" scroll  ") +
+			keyStyle.Render("esc") + dimStyle.Render(" back  ") +
+			keyStyle.Render("ctrl+y") + dimStyle.Render(" copy") + scrollInfo,
+	)
+
+	visibleLines = append(visibleLines, "", hints)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, visibleLines...)
+
+	// Wrap in a bordered box
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("213")).
+		Padding(0, 2).
+		Width(width - 6)
+
+	return lipgloss.NewStyle().Padding(0, 2).Render(boxStyle.Render(content))
 }
 
 func (m model) renderDashboard() string {
@@ -686,13 +872,17 @@ func (m model) renderDashboard() string {
 
 	// Conditional content based on selected tab
 	var tabContent string
-	if m.dashboardTab == 0 {
+	remainingH := contentH - lipgloss.Height(header) - lipgloss.Height(tabBar) - 2
+	switch m.dashboardTab {
+	case 0:
 		// Resources tab - show resource cards
 		tabContent = cardGrid
-	} else {
+	case 1:
 		// Actions tab - show actions list
-		remainingH := contentH - lipgloss.Height(header) - lipgloss.Height(tabBar) - 2
 		tabContent = m.renderActionsTab(mainAreaW, remainingH)
+	case 2:
+		// Agents tab - show agent history and active agents
+		tabContent = m.renderAgentsTab(mainAreaW, remainingH)
 	}
 
 	rightContent := lipgloss.JoinVertical(lipgloss.Left, header, tabBar, tabContent)
@@ -1114,10 +1304,8 @@ func (m model) renderStatusBar() string {
 	var leftContent, rightContent string
 
 	if m.currentView == viewDashboard {
-		tabName := "Resources"
-		if m.dashboardTab == 1 {
-			tabName = "Actions"
-		}
+		tabNames := []string{"Resources", "Actions", "Agents"}
+		tabName := tabNames[m.dashboardTab]
 		leftContent = brandStyleSB.Render("SKITZ") + bgStyle.Render("  ") +
 			contextStyle.Render("Dashboard › "+tabName)
 

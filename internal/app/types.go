@@ -4,11 +4,23 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// ActiveAgent represents a currently running agent
+type ActiveAgent struct {
+	ID        string
+	Name      string
+	Provider  string
+	Runtime   string    // "docker", "e2b"
+	StartTime time.Time
+	Status    string    // "running", "completed", "failed"
+	Task      string    // The prompt/task
+}
 
 // DashboardAction represents an action available in the Actions tab
 type DashboardAction struct {
@@ -206,6 +218,30 @@ var toolMetadata = map[string]toolMeta{
 		lastUsed:    "",
 		topCommands: []string{"fast-agent run", "fast-agent chat", "fast-agent init"},
 	},
+	"e2b": {
+		icon: "◇",
+		asciiArt: `╭───╮
+│ ◇ │
+╰───╯`,
+		color:       lipgloss.Color("43"),
+		category:    "Sandbox",
+		status:      "active",
+		cmdCount:    9,
+		lastUsed:    "",
+		topCommands: []string{"e2b auth login", "e2b sandbox list", "e2b template list"},
+	},
+	"codex": {
+		icon: "◎",
+		asciiArt: `╭───╮
+│ ◎ │
+╰───╯`,
+		color:       lipgloss.Color("79"),
+		category:    "AI Agent",
+		status:      "active",
+		cmdCount:    32,
+		lastUsed:    "",
+		topCommands: []string{"codex", "codex --help", "codex -a full-auto"},
+	},
 }
 
 // parseCommands parses commands from markdown content looking for ^run annotations
@@ -263,13 +299,16 @@ func CardGrid(items []CardItem, width int, selectedIdx int) string {
 		return ""
 	}
 
-	// Calculate card width (same logic as resources tab)
-	cardW := (width - 6) / 3
-	if cardW < 25 {
-		cardW = (width - 4) / 2
+	// Calculate card width - more compact layout
+	cardW := (width - 3) / 4 // Try 4 cards per row first
+	if cardW < 22 {
+		cardW = (width - 2) / 3 // Fall back to 3 cards
 	}
-	if cardW < 25 {
-		cardW = width - 4
+	if cardW < 22 {
+		cardW = (width - 2) / 2 // Fall back to 2 cards
+	}
+	if cardW < 22 {
+		cardW = width - 2
 	}
 
 	var cards []string
@@ -287,6 +326,13 @@ func CardGrid(items []CardItem, width int, selectedIdx int) string {
 		titleStyle := lipgloss.NewStyle().Bold(true).Foreground(titleColor)
 		descStyle := lipgloss.NewStyle().Foreground(subtle)
 
+		// Truncate subtitle if too long
+		subtitle := item.Subtitle
+		maxSubLen := cardW - 6
+		if len(subtitle) > maxSubLen && maxSubLen > 3 {
+			subtitle = subtitle[:maxSubLen-3] + "..."
+		}
+
 		var cardContent string
 		if item.Tag != "" {
 			tagStyle := lipgloss.NewStyle().
@@ -295,14 +341,13 @@ func CardGrid(items []CardItem, width int, selectedIdx int) string {
 				Padding(0, 1)
 			cardContent = lipgloss.JoinVertical(lipgloss.Left,
 				titleStyle.Render(item.Title)+"  "+shortcut,
-				descStyle.Render(item.Subtitle),
-				"",
+				descStyle.Render(subtitle),
 				tagStyle.Render(item.Tag),
 			)
 		} else {
 			cardContent = lipgloss.JoinVertical(lipgloss.Left,
 				titleStyle.Render(item.Title)+"  "+shortcut,
-				descStyle.Render(item.Subtitle),
+				descStyle.Render(subtitle),
 			)
 		}
 
@@ -321,7 +366,7 @@ func CardGrid(items []CardItem, width int, selectedIdx int) string {
 		cardStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(borderColor).
-			Padding(1, 1).
+			Padding(0, 1).
 			Width(cardW - 2)
 
 		cards = append(cards, cardStyle.Render(cardContent))
@@ -348,7 +393,7 @@ func CardGrid(items []CardItem, width int, selectedIdx int) string {
 
 // highlightShellCommand applies syntax highlighting to shell commands
 func highlightShellCommand(cmd string) string {
-	commandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("114")).Bold(true)
+	commandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("73")).Bold(true)
 	subcommandColor := lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
 	flagColor := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 	valueColor := lipgloss.NewStyle().Foreground(lipgloss.Color("228"))

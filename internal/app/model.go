@@ -65,6 +65,13 @@ type model struct {
 	agentHistory []config.AgentInteraction
 	favorites    map[string]bool
 
+	// Agents tab state
+	activeAgents       []ActiveAgent // Currently running agents
+	agentCursor        int           // Selection cursor for agents tab
+	agentViewMode      int           // 0=list, 1=detail
+	selectedAgentIdx   int           // Index for detail view
+	agentDetailScroll  int           // Scroll offset for detail view
+
 	// Notification/Toast
 	notification *Notification
 
@@ -135,6 +142,19 @@ type aiResponseMsg struct {
 // agentInteractionMsg is sent when an agent interaction completes
 type agentInteractionMsg struct {
 	interaction config.AgentInteraction
+}
+
+// agentStartedMsg is sent when an agent starts running
+type agentStartedMsg struct {
+	agent ActiveAgent
+}
+
+// agentCompletedMsg is sent when an agent finishes
+type agentCompletedMsg struct {
+	agentID  string
+	success  bool
+	output   string
+	duration int64
 }
 
 func tickCmd() tea.Cmd {
@@ -417,6 +437,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentInteractionMsg:
 		m.agentHistory = config.AddAgentInteraction(m.agentHistory, msg.interaction, 20)
 		config.SaveAgentHistory(m.agentHistory)
+		return m, nil
+
+	case agentStartedMsg:
+		m.activeAgents = append(m.activeAgents, msg.agent)
+		return m, nil
+
+	case agentCompletedMsg:
+		// Find and remove the agent from active list
+		for i, agent := range m.activeAgents {
+			if agent.ID == msg.agentID {
+				// Create history entry
+				interaction := config.AgentInteraction{
+					ID:        agent.ID,
+					Agent:     agent.Name,
+					Action:    agent.Task,
+					Input:     agent.Task,
+					Output:    msg.output,
+					Timestamp: agent.StartTime,
+					Success:   msg.success,
+					Runtime:   agent.Runtime,
+					Provider:  agent.Provider,
+					Duration:  msg.duration,
+				}
+				m.agentHistory = config.AddAgentInteraction(m.agentHistory, interaction, 50)
+				config.SaveAgentHistory(m.agentHistory)
+
+				// Remove from active agents
+				m.activeAgents = append(m.activeAgents[:i], m.activeAgents[i+1:]...)
+				break
+			}
+		}
 		return m, nil
 
 	case aiAgentResultMsg:

@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -1004,10 +1007,31 @@ func (m *model) executeRunAgent() tea.Cmd {
 		task = "Say hello and introduce yourself."
 	}
 
+	runtime := wizard.Runtime
+	providerName := wizard.Provider
 	m.runAgentWizard = nil
 
-	if wizard.Runtime == "docker" {
+	// Generate unique ID for this agent run
+	agentID := uuid.New().String()
+
+	// Create ActiveAgent entry
+	activeAgent := ActiveAgent{
+		ID:        agentID,
+		Name:      agentName,
+		Provider:  providerName,
+		Runtime:   runtime,
+		StartTime: time.Now(),
+		Status:    "running",
+		Task:      task,
+	}
+
+	// Add to active agents immediately
+	m.activeAgents = append(m.activeAgents, activeAgent)
+
+	if runtime == "docker" {
 		if _, err := exec.LookPath("docker"); err != nil {
+			// Remove from active agents on error
+			m.removeActiveAgent(agentID)
 			return m.showNotification("!", "Docker not found. Install from https://docs.docker.com/get-docker/", "error")
 		}
 
@@ -1050,24 +1074,81 @@ func (m *model) executeRunAgent() tea.Cmd {
 			envVar = "OPENAI_API_KEY"
 		}
 
-		log.Printf("executeRunAgent: using provider=%s type=%s model=%s", provider.Name, provider.ProviderType, model)
+		log.Printf("executeRunAgent: using provider=%s type=%s model=%s agentID=%s", provider.Name, provider.ProviderType, model, agentID)
 
 		// Use skitz-fastagent image with env vars for prompt and model
 		cmd := fmt.Sprintf(`docker run --rm --name %s -e %s=%s -e AGENT_MODEL=%s -e AGENT_PROMPT=%q %s`,
 			agentName, envVar, apiKeyValue, model, task, image)
 		log.Printf("executeRunAgent: running docker command (key redacted)")
-		return m.runCommand(CommandSpec{
-			Command: cmd,
-			Mode:    CommandEmbedded,
-		})
+
+		// Return both the agent started message and the run command
+		return tea.Batch(
+			func() tea.Msg {
+				return agentStartedMsg{agent: activeAgent}
+			},
+			m.runAgentCommand(CommandSpec{
+				Command: cmd,
+				Mode:    CommandEmbedded,
+			}, agentID),
+		)
 	}
 
 	// E2B runtime
 	if _, err := exec.LookPath("e2b"); err != nil {
+		m.removeActiveAgent(agentID)
 		return m.showNotification("!", "E2B CLI not found. Install with: npm install -g @e2b/cli", "error")
 	}
 
-	return m.showNotification("✓", fmt.Sprintf("E2B agent '%s' ready. Use e2b CLI to spawn sandbox.", agentName), "success")
+	// For E2B, mark as completed immediately since it's just preparation
+	return tea.Batch(
+		func() tea.Msg {
+			return agentCompletedMsg{
+				agentID:  agentID,
+				success:  true,
+				output:   "E2B sandbox ready. Use e2b CLI to interact.",
+				duration: 0,
+			}
+		},
+		m.showNotification("✓", fmt.Sprintf("E2B agent '%s' ready. Use e2b CLI to spawn sandbox.", agentName), "success"),
+	)
+}
+
+// removeActiveAgent removes an agent from the active list
+func (m *model) removeActiveAgent(agentID string) {
+	for i, agent := range m.activeAgents {
+		if agent.ID == agentID {
+			m.activeAgents = append(m.activeAgents[:i], m.activeAgents[i+1:]...)
+			return
+		}
+	}
+}
+
+// runAgentCommand runs a command and tracks agent completion
+func (m *model) runAgentCommand(spec CommandSpec, agentID string) tea.Cmd {
+	// Find the active agent to get start time
+	var startTime time.Time
+	for _, agent := range m.activeAgents {
+		if agent.ID == agentID {
+			startTime = agent.StartTime
+			break
+		}
+	}
+
+	return func() tea.Msg {
+		// Run the command and capture output
+		cmd := exec.Command("sh", "-c", spec.Command)
+		output, err := cmd.CombinedOutput()
+
+		duration := time.Since(startTime).Milliseconds()
+		success := err == nil
+
+		return agentCompletedMsg{
+			agentID:  agentID,
+			success:  success,
+			output:   string(output),
+			duration: duration,
+		}
+	}
 }
 
 // openConfigInEditor opens the config file in the user's editor
