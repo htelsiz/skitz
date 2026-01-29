@@ -71,6 +71,16 @@ type DeleteResourceWizard struct {
 	InputForm    *huh.Form
 }
 
+// RunAgentWizard holds state for the Run Agent wizard
+type RunAgentWizard struct {
+	Step      int       // 0=runtime, 1=config, 2=confirm
+	Runtime   string    // "docker" or "e2b"
+	AgentName string
+	Task      string
+	Image     string
+	InputForm *huh.Form
+}
+
 // section represents a documentation section within a resource
 type section struct {
 	title   string

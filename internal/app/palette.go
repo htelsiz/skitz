@@ -82,6 +82,17 @@ func (m *model) buildPaletteItems() []PaletteItem {
 	var items []PaletteItem
 
 	items = append(items, PaletteItem{
+		ID:       "action:deep_research",
+		Icon:     "🔬",
+		Title:    "Deep Research",
+		Subtitle: "Research any topic with Fast-Agent",
+		Category: "action",
+		Handler: func(m *model) tea.Cmd {
+			return m.startResearchWizard()
+		},
+	})
+
+	items = append(items, PaletteItem{
 		ID:       "action:bia_review",
 		Icon:     "🔍",
 		Title:    "BIA Code Review",
@@ -100,17 +111,6 @@ func (m *model) buildPaletteItems() []PaletteItem {
 		Category: "action",
 		Handler: func(m *model) tea.Cmd {
 			return m.startDeployWizard()
-		},
-	})
-
-	items = append(items, PaletteItem{
-		ID:       "action:cloud_agent",
-		Icon:     "☁️",
-		Title:    "Cloud Agent Action",
-		Subtitle: "Run agents on Azure, AWS, or GCP",
-		Category: "action",
-		Handler: func(m *model) tea.Cmd {
-			return m.startCloudAgentWizard()
 		},
 	})
 
@@ -1458,8 +1458,8 @@ func (m *model) nextWizardStep() tea.Cmd {
 		return m.nextBIAStep()
 	case "deploy":
 		return m.nextDeployStep()
-	case "cloud_agent":
-		return m.nextCloudAgentStep()
+	case "research":
+		return m.nextResearchStep()
 	}
 	return nil
 }
@@ -1931,8 +1931,6 @@ func (m *model) handleWizardSubmit() tea.Cmd {
 		case 3:
 			ws.Data["prompt"] = value
 		}
-	case "cloud_agent":
-		return m.handleCloudAgentWizardSubmit()
 	}
 
 	if advanceStep {

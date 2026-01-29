@@ -259,6 +259,43 @@ func (m model) renderActionsTab(width, height int) string {
 			wizardStyle.Render(wizardContent))
 	}
 
+	// If run agent wizard is active, show wizard form
+	if m.runAgentWizard != nil && m.runAgentWizard.InputForm != nil {
+		wizardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("220")).
+			Padding(1, 2).
+			Width(width - 10).
+			Align(lipgloss.Center)
+
+		stepLabels := []string{"Select Runtime", "Configure Agent", "Confirm"}
+		stepLabel := ""
+		if m.runAgentWizard.Step < len(stepLabels) {
+			stepLabel = stepLabels[m.runAgentWizard.Step]
+		}
+
+		header := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("220")).
+			Bold(true).
+			Render("⚡ Run Agent - " + stepLabel)
+
+		formView := m.runAgentWizard.InputForm.View()
+
+		wizardContent := lipgloss.JoinVertical(lipgloss.Center,
+			"",
+			header,
+			"",
+			formView,
+			"",
+			lipgloss.NewStyle().Foreground(subtle).Render("Press ESC to cancel"),
+			"",
+		)
+
+		return lipgloss.Place(width, height,
+			lipgloss.Center, lipgloss.Center,
+			wizardStyle.Render(wizardContent))
+	}
+
 	titleStyle := lipgloss.NewStyle().
 		Foreground(secondary).
 		Bold(true)
