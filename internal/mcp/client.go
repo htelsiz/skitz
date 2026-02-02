@@ -40,7 +40,7 @@ const defaultMCPServerURL = "http://localhost:8001/mcp/"
 
 // GetServerURL returns the MCP server URL from env or default.
 func GetServerURL() string {
-	if url := os.Getenv("BLDRSPEC_MCP_URL"); url != "" {
+	if url := os.Getenv("SKITZ_MCP_URL"); url != "" {
 		return url
 	}
 	return defaultMCPServerURL
@@ -214,7 +214,7 @@ func (m *Client) GetServerInfo() (name string, sessionID string) {
 	if !m.connected {
 		return "", ""
 	}
-	return "bldrspec-ai", m.client.GetSessionId()
+	return "mcp-server", m.client.GetSessionId()
 }
 
 // FetchTools connects to an MCP server and returns the available tools.

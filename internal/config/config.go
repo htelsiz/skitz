@@ -210,7 +210,7 @@ func defaultMCPConfig(defaultMCPURL string) MCPConfig {
 		RefreshSeconds: 60,
 		Servers: []MCPServerConfig{
 			{
-				Name: "bldrspec-ai",
+				Name: "local",
 				URL:  defaultMCPURL,
 			},
 		},

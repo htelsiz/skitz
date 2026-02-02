@@ -136,7 +136,7 @@ func (c *biaCodeReviewCmd) Run() error {
 
 	if !CheckMCPServer() {
 		spinner.Stop("", 0)
-		tap.Box("MCP server not available.\nMake sure bldrspec-ai is running:\n  docker compose up", "Error", tap.BoxOptions{})
+		tap.Box("MCP server not available.\nCheck your MCP server configuration in:\n  ~/.config/skitz/config.yaml", "Error", tap.BoxOptions{})
 		waitForEnterMCP()
 		return nil
 	}

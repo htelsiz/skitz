@@ -50,14 +50,14 @@ mcp:
   enabled: true
   refresh_seconds: 60
   servers:
-    - name: "bldrspec-ai"
+    - name: "local"
       url: "http://localhost:8001/mcp/"
 ```
 
 ### Environment Variable
 
 ```bash
-export BLDRSPEC_MCP_URL="http://localhost:8001/mcp/"
+export SKITZ_MCP_URL="http://localhost:8001/mcp/"
 ```
 
 The environment variable overrides the config file for the default server URL.
@@ -193,7 +193,7 @@ if result.StructuredContent != nil {
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
-status := FetchMCPServerStatus(ctx, "bldrspec-ai", "http://localhost:8001/mcp/")
+status := FetchMCPServerStatus(ctx, "local", "http://localhost:8001/mcp/")
 
 fmt.Printf("Connected: %v\n", status.Connected)
 fmt.Printf("Tools: %v\n", status.Tools)
@@ -430,7 +430,7 @@ Update config:
 ```yaml
 mcp:
   servers:
-    - name: "bldrspec-ai"
+    - name: "local"
       url: "http://localhost:8001/mcp/"
     - name: "another-server"
       url: "http://localhost:9000/mcp/"
