@@ -55,7 +55,7 @@ HTTP-based client for Model Context Protocol servers:
 - Tool listing and invocation
 - Multi-server status monitoring
 
-**Environment**: `BLDRSPEC_MCP_URL` (default: `http://localhost:8001/mcp/`)
+**Environment**: `SKITZ_MCP_URL` (default: `http://localhost:8001/mcp/`)
 
 ### BIA Agent (`internal/app/agent.go`)
 

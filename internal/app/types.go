@@ -268,6 +268,30 @@ var toolMetadata = map[string]toolMeta{
 		lastUsed:    "",
 		topCommands: []string{"gcloud auth login", "gcloud projects list", "gcloud ai models list"},
 	},
+	"go": {
+		icon: "◬",
+		asciiArt: `╭───╮
+│ ◬ │
+╰───╯`,
+		color:       lipgloss.Color("75"),
+		category:    "Language",
+		status:      "active",
+		cmdCount:    26,
+		lastUsed:    "",
+		topCommands: []string{"go build ./...", "go test ./...", "go mod tidy"},
+	},
+	"nixos": {
+		icon: "❄",
+		asciiArt: `╭───╮
+│ ❄ │
+╰───╯`,
+		color:       lipgloss.Color("105"),
+		category:    "System",
+		status:      "active",
+		cmdCount:    31,
+		lastUsed:    "",
+		topCommands: []string{"nixos-rebuild switch", "nix flake update", "nix search nixpkgs"},
+	},
 }
 
 // parseCommands parses commands from markdown content looking for ^run annotations
