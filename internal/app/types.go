@@ -280,6 +280,18 @@ var toolMetadata = map[string]toolMeta{
 		lastUsed:    "",
 		topCommands: []string{"go build ./...", "go test ./...", "go mod tidy"},
 	},
+	"rust": {
+		icon: "⚙",
+		asciiArt: `╭───╮
+│ ⚙ │
+╰───╯`,
+		color:       lipgloss.Color("208"),
+		category:    "Language",
+		status:      "active",
+		cmdCount:    26,
+		lastUsed:    "",
+		topCommands: []string{"cargo build", "cargo test", "cargo clippy"},
+	},
 	"nixos": {
 		icon: "❄",
 		asciiArt: `╭───╮
