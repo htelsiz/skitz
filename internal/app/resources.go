@@ -29,6 +29,10 @@ func (m *model) loadResources() {
 		"e2b":        "Cloud sandbox for AI agents",
 		"gcp":        "Google Cloud CLI commands",
 		"codex":      "OpenAI CLI coding agent",
+		"nixos":      "NixOS system configuration",
+		"go":         "Go programming language",
+		"rust":       "Rust programming language",
+		"tailscale":  "Mesh VPN & network management",
 	}
 
 	userDir := config.ResourcesDir
