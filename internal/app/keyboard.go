@@ -229,6 +229,49 @@ func (m *model) handlePaletteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleAskPanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 
+	// Edit mode handling
+	if m.askPanel.Mode == "edit" {
+		switch keyStr {
+		case "esc":
+			m.askPanel = nil
+			return m, nil
+		case "enter":
+			if m.askPanel.Input != "" && !m.askPanel.Loading && m.askPanel.EditedContent == "" {
+				return m, m.submitAIEdit()
+			}
+			return m, nil
+		case "ctrl+s":
+			// Apply AI edit
+			if m.askPanel.EditedContent != "" {
+				return m, m.applyAIEdit(m.askPanel.EditedContent)
+			}
+			return m, nil
+		case "backspace":
+			if m.askPanel.EditedContent == "" && len(m.askPanel.Input) > 0 {
+				m.askPanel.Input = m.askPanel.Input[:len(m.askPanel.Input)-1]
+			}
+			return m, nil
+		case "ctrl+r":
+			// Reset to type a new instruction after seeing results
+			if m.askPanel.EditedContent != "" {
+				m.askPanel.EditedContent = ""
+				m.askPanel.Response = ""
+				m.askPanel.Input = ""
+			}
+			return m, nil
+		default:
+			if m.askPanel.EditedContent == "" {
+				if len(keyStr) == 1 && keyStr[0] >= 32 && keyStr[0] < 127 {
+					m.askPanel.Input += keyStr
+				} else if keyStr == "space" {
+					m.askPanel.Input += " "
+				}
+			}
+			return m, nil
+		}
+	}
+
+	// Ask mode handling (default)
 	switch keyStr {
 	case "esc":
 		m.askPanel = nil
@@ -365,6 +408,19 @@ func (m *model) handleDetailViewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.askPanel = &AskPanel{
 			Active: true,
+			Mode:   "ask",
+			Input:  "",
+		}
+		return m, nil
+
+	case "ctrl+e":
+		// Open AI Edit panel
+		if m.config.AI.DefaultProvider == "" {
+			return m, m.showNotification("!", "Configure a provider first", "warning")
+		}
+		m.askPanel = &AskPanel{
+			Active: true,
+			Mode:   "edit",
 			Input:  "",
 		}
 		return m, nil

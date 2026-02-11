@@ -52,6 +52,45 @@ func (m *model) submitAskPanel() tea.Cmd {
 	}
 }
 
+func (m *model) submitAIEdit() tea.Cmd {
+	if m.askPanel == nil || m.askPanel.Input == "" {
+		return nil
+	}
+
+	m.askPanel.Loading = true
+	m.askPanel.Response = ""
+	m.askPanel.Error = ""
+	m.askPanel.EditedContent = ""
+
+	instruction := m.askPanel.Input
+	content := ""
+	if res := m.currentResource(); res != nil {
+		content = res.content
+	}
+
+	return func() tea.Msg {
+		client, err := ai.GetDefaultClient(m.config)
+		if err != nil {
+			return aiEditResponseMsg{err: err}
+		}
+
+		resp := client.EditResource(instruction, content)
+		if resp.Error != nil {
+			return aiEditResponseMsg{err: resp.Error}
+		}
+
+		edited := strings.TrimSpace(resp.Content)
+
+		// Generate a brief summary of what changed
+		summary := "Resource updated based on: " + instruction
+
+		return aiEditResponseMsg{
+			editedContent: edited,
+			summary:       summary,
+		}
+	}
+}
+
 func (m *model) submitGenerateCommand() tea.Cmd {
 	if m.askPanel == nil || m.askPanel.Input == "" {
 		return nil

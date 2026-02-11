@@ -74,6 +74,33 @@ If you suggest a runnable command, put it on its own line starting with $ like: 
 	return c.chat(messages)
 }
 
+// EditResource asks the AI to edit a resource file based on an instruction
+func (c *Client) EditResource(instruction string, currentContent string) Response {
+	systemPrompt := `You are a resource file editor for skitz, a CLI command center tool.
+You edit markdown resource files that contain command references.
+
+Resource file format rules:
+- Lines with ` + "`command here`" + ` description ^run are runnable commands
+- Lines with ` + "`command {{var}}`" + ` description ^run:var prompt for the variable before running
+- Regular markdown (headings, lists, text) for documentation
+- ## headings create navigable sections
+
+Given the current resource content and the user's edit instruction,
+output ONLY the complete updated resource file content.
+Do not wrap in code fences. Do not include any explanation, just the raw markdown content.
+Preserve the existing format and annotations (^run, ^run:varname) unless told to change them.
+When adding new runnable commands, include the ^run annotation.`
+
+	userMsg := "Current resource content:\n```\n" + currentContent + "\n```\n\nEdit instruction: " + instruction
+
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userMsg},
+	}
+
+	return c.chat(messages)
+}
+
 // GenerateCommand asks the AI to generate a specific command
 func (c *Client) GenerateCommand(description string, context string) Response {
 	systemPrompt := `You are a command generator for CLI tools.

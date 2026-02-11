@@ -1302,6 +1302,10 @@ func (m model) renderResourceView() string {
 
 // renderAskPanel renders the AI ask panel
 func (m model) renderAskPanel(width int) string {
+	if m.askPanel.Mode == "edit" {
+		return m.renderEditPanel(width)
+	}
+
 	panelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("39")).
@@ -1383,6 +1387,124 @@ func (m model) renderAskPanel(width int) string {
 	return panelStyle.Render(content)
 }
 
+// renderEditPanel renders the AI edit panel for resource editing
+func (m model) renderEditPanel(width int) string {
+	editColor := lipgloss.Color("213") // Pink/magenta for edit mode
+
+	panelStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(editColor).
+		Padding(1, 2).
+		Width(width - 4)
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(editColor).
+		Bold(true)
+
+	inputStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("235")).
+		Foreground(lipgloss.Color("255")).
+		Padding(0, 1).
+		Width(width - 12)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(subtle).
+		Italic(true)
+
+	keyHintStyle := lipgloss.NewStyle().
+		Foreground(editColor)
+
+	var lines []string
+
+	resName := ""
+	if res := m.currentResource(); res != nil {
+		resName = res.name
+	}
+
+	// Title
+	lines = append(lines, titleStyle.Render("✎ AI Edit: "+resName))
+	lines = append(lines, "")
+
+	// Input field
+	if m.askPanel.EditedContent == "" {
+		inputContent := m.askPanel.Input
+		if m.askPanel.Loading {
+			inputContent = m.askPanel.Input + " ..."
+		}
+		cursor := "▌"
+		if m.askPanel.Loading {
+			cursor = ""
+		}
+		lines = append(lines, hintStyle.Render("Describe what to change:"))
+		lines = append(lines, inputStyle.Render("> "+inputContent+cursor))
+		lines = append(lines, "")
+	}
+
+	// Response or loading
+	if m.askPanel.Loading {
+		lines = append(lines, hintStyle.Render("AI is editing the resource..."))
+	} else if m.askPanel.Error != "" {
+		errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+		lines = append(lines, errorStyle.Render("Error: "+m.askPanel.Error))
+	} else if m.askPanel.EditedContent != "" {
+		// Show summary and preview
+		successStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("114")).
+			Bold(true)
+		lines = append(lines, successStyle.Render("Edit ready to apply"))
+		lines = append(lines, "")
+
+		responseStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
+		lines = append(lines, responseStyle.Render(m.askPanel.Response))
+		lines = append(lines, "")
+
+		// Show a preview of the edited content (first few lines)
+		previewStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color("235")).
+			Foreground(lipgloss.Color("252")).
+			Width(width - 12).
+			Padding(0, 1)
+
+		previewLines := strings.Split(m.askPanel.EditedContent, "\n")
+		maxPreview := 8
+		preview := ""
+		for i, line := range previewLines {
+			if i >= maxPreview {
+				preview += fmt.Sprintf("  ... +%d more lines", len(previewLines)-maxPreview)
+				break
+			}
+			if i > 0 {
+				preview += "\n"
+			}
+			preview += line
+		}
+		lines = append(lines, hintStyle.Render("Preview:"))
+		lines = append(lines, previewStyle.Render(preview))
+		lines = append(lines, "")
+
+		// Action hints
+		lines = append(lines,
+			keyHintStyle.Render("ctrl+s")+hintStyle.Render(" apply changes  ")+
+				keyHintStyle.Render("ctrl+r")+hintStyle.Render(" new edit  ")+
+				keyHintStyle.Render("esc")+hintStyle.Render(" cancel"))
+	}
+
+	if m.askPanel.EditedContent == "" {
+		lines = append(lines, "")
+		exampleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		lines = append(lines, exampleStyle.Render("Examples: \"add docker compose commands\", \"remove the login section\","))
+		lines = append(lines, exampleStyle.Render("\"add a command to restart nginx\", \"reorganize by category\""))
+		lines = append(lines, "")
+		lines = append(lines,
+			keyHintStyle.Render("enter")+hintStyle.Render(" submit  ")+
+				keyHintStyle.Render("esc")+hintStyle.Render(" cancel"))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return panelStyle.Render(content)
+}
+
 func (m model) renderStatusBar() string {
 	bgStyle := lipgloss.NewStyle().Background(lipgloss.Color("236"))
 	keyStyle := lipgloss.NewStyle().
@@ -1442,6 +1564,7 @@ func (m model) renderStatusBar() string {
 		leftContent = breadcrumb
 
 		rightContent = keyStyle.Render("a") + descStyle.Render(" ask AI") + sep +
+			keyStyle.Render("ctrl+e") + descStyle.Render(" AI edit") + sep +
 			keyStyle.Render("↑↓") + descStyle.Render(" select") + sep +
 			keyStyle.Render("enter") + descStyle.Render(" run") + sep +
 			keyStyle.Render("esc") + descStyle.Render(" back")

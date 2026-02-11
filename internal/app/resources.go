@@ -201,6 +201,29 @@ func (m *model) editResource() tea.Cmd {
 	})
 }
 
+func (m *model) applyAIEdit(editedContent string) tea.Cmd {
+	res := m.currentResource()
+	if res == nil {
+		return m.showNotification("!", "No resource selected", "error")
+	}
+
+	if err := os.MkdirAll(config.ResourcesDir, 0755); err != nil {
+		return m.showNotification("!", "Failed to create directory: "+err.Error(), "error")
+	}
+
+	filePath := filepath.Join(config.ResourcesDir, res.name+".md")
+
+	if err := os.WriteFile(filePath, []byte(editedContent), 0644); err != nil {
+		return m.showNotification("!", "Failed to save: "+err.Error(), "error")
+	}
+
+	m.loadResources()
+	m.askPanel = nil
+	m.initViewComponents()
+
+	return m.showNotification("", "Resource updated via AI", "success")
+}
+
 func (m *model) addCommandToResource(cmd string) tea.Cmd {
 	res := m.currentResource()
 	if res == nil {

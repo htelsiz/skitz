@@ -93,11 +93,13 @@ type model struct {
 // AskPanel holds state for the AI ask feature
 type AskPanel struct {
 	Active       bool
+	Mode         string // "ask" (default) or "edit"
 	Input        string
 	Response     string
 	Loading      bool
 	Error        string
 	GeneratedCmd string // If AI generated a runnable command
+	EditedContent string // AI-edited resource content (edit mode)
 }
 
 // EmbeddedTerm holds the state for the embedded terminal pane
@@ -139,6 +141,13 @@ type aiResponseMsg struct {
 	response     string
 	generatedCmd string
 	err          error
+}
+
+// aiEditResponseMsg is sent when AI finishes editing a resource
+type aiEditResponseMsg struct {
+	editedContent string
+	summary       string
+	err           error
 }
 
 // agentInteractionMsg is sent when an agent interaction completes
@@ -525,6 +534,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closePalette()
 		}
 
+		return m, nil
+
+	case aiEditResponseMsg:
+		if m.askPanel != nil && m.askPanel.Mode == "edit" {
+			m.askPanel.Loading = false
+			if msg.err != nil {
+				m.askPanel.Error = msg.err.Error()
+			} else {
+				m.askPanel.EditedContent = msg.editedContent
+				m.askPanel.Response = msg.summary
+			}
+		}
 		return m, nil
 
 	case aiResponseMsg:
